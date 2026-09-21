@@ -100,7 +100,7 @@ export const StatementUploadsModule: React.FC = () => {
     <div className="space-y-6">
       
       {/* Header */}
-      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center space-x-3">
           <span className="p-2 bg-rose-50 text-rose-700 rounded-lg">
             <CalendarCheck className="w-5 h-5" />
@@ -193,8 +193,8 @@ export const StatementUploadsModule: React.FC = () => {
 
       {/* Detail / Upload Modal */}
       {selectedCell && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-md w-full space-y-5 border border-slate-100 animate-in fade-in zoom-in-95 duration-150">
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl shadow-2xl p-4 sm:p-6 max-w-md w-full space-y-4 sm:space-y-5 border border-slate-100 animate-in fade-in zoom-in-95 duration-150">
             
             <div className="flex items-start justify-between">
               <div>

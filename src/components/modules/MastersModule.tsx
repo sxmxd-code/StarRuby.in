@@ -1,8 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
 import { SlideOverDrawer } from '../common/SlideOverDrawer';
-import { Building, Users, Landmark, Contact, Plus, Check, Shield, Edit2, Trash2, Tag, X, Sparkles } from 'lucide-react';
-import { Company, User, Account, Party, Currency, AccessLevelType } from '../../types/database';
+import { Building, Users, Landmark, Contact, Plus, Check, Shield, Edit2, Trash2, Tag, X, Sparkles, Copy, Eye, EyeOff, Key, Lock, AlertCircle, RefreshCw, Search, ChevronDown } from 'lucide-react';
+import { Company, User, Account, Party, Currency, AccessLevelType, PasswordResetRequest } from '../../types/database';
 
 export const MastersModule: React.FC = () => {
   const {
@@ -14,6 +14,7 @@ export const MastersModule: React.FC = () => {
     addUser,
     updateUser,
     deleteUser,
+    toggleUserActiveStatus,
     accessLevels,
     addAccessLevel,
     accounts,
@@ -32,6 +33,10 @@ export const MastersModule: React.FC = () => {
     assignCompanyToUser,
     removeCompanyFromUser,
     currentRole,
+    passwordResetRequests,
+    setUserPassword,
+    approvePasswordReset,
+    rejectPasswordReset,
   } = useApp();
 
   const [activeSubTab, setActiveSubTab] = useState<'companies' | 'users' | 'accounts' | 'parties'>('companies');
@@ -117,7 +122,11 @@ export const MastersModule: React.FC = () => {
   const handleDeleteCompany = () => {
     if (selectedCompanyId === 'NEW') return;
     if (window.confirm(`Are you sure you want to delete Company ${selectedCompanyId}?`)) {
-      deleteCompany(selectedCompanyId);
+      const res = deleteCompany(selectedCompanyId);
+      if (!res.success) {
+        alert(res.error || 'Failed to delete company.');
+        return;
+      }
       setIsCompanyDrawerOpen(false);
       setFeedback(`Company ${selectedCompanyId} deleted.`);
       setTimeout(() => setFeedback(null), 4000);
@@ -133,6 +142,17 @@ export const MastersModule: React.FC = () => {
   const [userEmail, setUserEmail] = useState('');
   const [userSelectedRoles, setUserSelectedRoles] = useState<string[]>(['ACC4']);
 
+  // Password Management States for User Drawer
+  const [userPassword, setUserPasswordInput] = useState('');
+  const [showUserPassword, setShowUserPassword] = useState(false);
+  const [copiedPasswordNotice, setCopiedPasswordNotice] = useState(false);
+
+  // Sub-view toggle for Users Tab: Active Team vs Password Reset Requests
+  const [userTabMode, setUserTabMode] = useState<'users' | 'resets'>('users');
+  const [selectedResetReq, setSelectedResetReq] = useState<PasswordResetRequest | null>(null);
+  const [tempPasswordInput, setTempPasswordInput] = useState('');
+  const [showTempPassword, setShowTempPassword] = useState(false);
+
   // New Access Role dynamic sub-section
   const [newRoleLevelType, setNewRoleLevelType] = useState<AccessLevelType>('Staff');
   const [newRoleDesc, setNewRoleDesc] = useState('');
@@ -146,19 +166,47 @@ export const MastersModule: React.FC = () => {
     [accessLevels]
   );
 
+  // Password Generator Helper: generates enterprise strong passwords (e.g. SR#7821!Staff)
+  const generateSecurePassword = (role: string = 'Staff') => {
+    const randomNum = Math.floor(1000 + Math.random() * 9000);
+    const cleanRole = role.replace(/\s+/g, '');
+    const generated = `SR#${randomNum}!${cleanRole}`;
+    setUserPasswordInput(generated);
+    return generated;
+  };
+
+  const handleCopyCredentials = () => {
+    const primaryRoleId = userSelectedRoles[0] || 'ACC4';
+    const roleLevel = accessLevels.find(a => a.id === primaryRoleId)?.level_type || 'Staff';
+    const text = `StarRuby.in Banking Portal Credentials\nURL: http://localhost:5173\nEmail: ${userEmail.trim().toLowerCase()}\nPassword: ${userPassword}\nRole: ${roleLevel}`;
+    navigator.clipboard.writeText(text);
+    setCopiedPasswordNotice(true);
+    setTimeout(() => setCopiedPasswordNotice(false), 3000);
+  };
+
   const openAddUserDrawer = () => {
+    if (currentRole !== 'Admin') {
+      alert('Access Restricted: Only Admins can register new team members.');
+      return;
+    }
     setSelectedUserId('NEW');
     setUserFullName('');
     setUserEmail('');
     setUserSelectedRoles(['ACC4']);
+    generateSecurePassword('Staff');
     setIsUserDrawerOpen(true);
   };
 
   const openEditUserDrawer = (u: User) => {
+    if (currentRole !== 'Admin') {
+      alert('Access Restricted: Only Admins can modify user records and credentials.');
+      return;
+    }
     setSelectedUserId(u.id);
     setUserFullName(u.full_name);
     setUserEmail(u.email);
     setUserSelectedRoles(u.access_role_ids && u.access_role_ids.length > 0 ? u.access_role_ids : [u.access_level_id]);
+    setUserPasswordInput(''); // Blank on edit so existing password isn't overwritten unless typed
     setIsUserDrawerOpen(true);
   };
 
@@ -168,12 +216,14 @@ export const MastersModule: React.FC = () => {
       setUserFullName('');
       setUserEmail('');
       setUserSelectedRoles(['ACC4']);
+      generateSecurePassword('Staff');
     } else {
       const u = allUsers.find(user => user.id === id);
       if (u) {
         setUserFullName(u.full_name);
         setUserEmail(u.email);
         setUserSelectedRoles(u.access_role_ids && u.access_role_ids.length > 0 ? u.access_role_ids : [u.access_level_id]);
+        setUserPasswordInput('');
       }
     }
   };
@@ -185,6 +235,10 @@ export const MastersModule: React.FC = () => {
   };
 
   const handleCreateAccessRole = () => {
+    if (currentRole !== 'Admin') {
+      alert('Access Restricted: Only Admins can define access roles.');
+      return;
+    }
     if (!newRoleDesc.trim()) {
       alert('Please enter a role description.');
       return;
@@ -200,23 +254,36 @@ export const MastersModule: React.FC = () => {
     setTimeout(() => setFeedback(null), 4000);
   };
 
-  const handleSaveUser = (e: React.FormEvent) => {
+  const handleSaveUser = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (currentRole !== 'Admin') {
+      alert('Security Exception: Only Admins have permission to modify users or passwords.');
+      return;
+    }
     if (!userFullName.trim() || !userEmail.trim()) {
       alert('Full Name and Email are required.');
       return;
     }
     const primaryRoleId = userSelectedRoles[0] || 'ACC4';
+    const roleLevel = accessLevels.find(a => a.id === primaryRoleId)?.level_type || 'Staff';
 
     if (selectedUserId === 'NEW') {
-      const created = addUser({
-        full_name: userFullName.trim(),
-        email: userEmail.trim().toLowerCase(),
-        access_level_id: primaryRoleId,
-        access_role_ids: userSelectedRoles,
-        is_active: true,
-      });
-      setFeedback(`User ${created.id} (${created.full_name}) registered successfully!`);
+      if (!userPassword.trim()) {
+        alert('Please specify or generate an initial password for the user.');
+        return;
+      }
+      const created = addUser(
+        {
+          full_name: userFullName.trim(),
+          email: userEmail.trim().toLowerCase(),
+          access_level_id: primaryRoleId,
+          access_role_ids: userSelectedRoles,
+          is_active: true,
+        },
+        undefined,
+        userPassword.trim()
+      );
+      setFeedback(`User ${created.id} (${created.full_name}) registered with initial credentials!`);
     } else {
       updateUser(selectedUserId, {
         full_name: userFullName.trim(),
@@ -224,18 +291,57 @@ export const MastersModule: React.FC = () => {
         access_level_id: primaryRoleId,
         access_role_ids: userSelectedRoles,
       });
-      setFeedback(`User ${selectedUserId} updated successfully!`);
+
+      if (userPassword.trim()) {
+        await setUserPassword(userEmail.trim().toLowerCase(), userPassword.trim(), roleLevel, userFullName.trim());
+        setFeedback(`User ${selectedUserId} profile and password updated!`);
+      } else {
+        setFeedback(`User ${selectedUserId} updated successfully!`);
+      }
     }
+    setUserPasswordInput('');
     setIsUserDrawerOpen(false);
     setTimeout(() => setFeedback(null), 4000);
   };
 
   const handleDeleteUser = () => {
+    if (currentRole !== 'Admin') return;
     if (selectedUserId === 'NEW') return;
     if (window.confirm(`Are you sure you want to delete User ${selectedUserId}?`)) {
-      deleteUser(selectedUserId);
+      const res = deleteUser(selectedUserId);
+      if (!res.success) {
+        alert(res.error || 'Failed to delete user.');
+        return;
+      }
       setIsUserDrawerOpen(false);
       setFeedback(`User ${selectedUserId} deleted.`);
+      setTimeout(() => setFeedback(null), 4000);
+    }
+  };
+
+  // Password Reset Approval Actions
+  const handleApproveResetRequest = async (req: PasswordResetRequest) => {
+    if (currentRole !== 'Admin') return;
+    const generated = tempPasswordInput.trim() || `SR#${Math.floor(1000 + Math.random() * 9000)}!Reset`;
+    const res = await approvePasswordReset(req.id, generated);
+    if (res.success) {
+      navigator.clipboard.writeText(`StarRuby.in Temporary Password\nEmail: ${req.email}\nTemporary Password: ${generated}`);
+      setFeedback(`Password reset approved for ${req.email}. Temp password copied to clipboard!`);
+      setSelectedResetReq(null);
+      setTempPasswordInput('');
+    } else {
+      alert(res.error || 'Failed to approve reset.');
+    }
+    setTimeout(() => setFeedback(null), 5000);
+  };
+
+  const handleRejectResetRequest = async (reqId: string) => {
+    if (currentRole !== 'Admin') return;
+    if (window.confirm('Reject this password reset request?')) {
+      const res = await rejectPasswordReset(reqId);
+      if (res.success) {
+        setFeedback('Password reset request rejected.');
+      }
       setTimeout(() => setFeedback(null), 4000);
     }
   };
@@ -373,7 +479,11 @@ export const MastersModule: React.FC = () => {
   const handleDeleteAccount = () => {
     if (selectedAccId === 'NEW') return;
     if (window.confirm(`Are you sure you want to delete Bank Account ${selectedAccId}?`)) {
-      deleteAccount(selectedAccId);
+      const res = deleteAccount(selectedAccId);
+      if (!res.success) {
+        alert(res.error || 'Failed to delete bank account.');
+        return;
+      }
       setIsAccountDrawerOpen(false);
       setFeedback(`Bank Account ${selectedAccId} deleted.`);
       setTimeout(() => setFeedback(null), 4000);
@@ -404,13 +514,50 @@ export const MastersModule: React.FC = () => {
   const [partyAliasesList, setPartyAliasesList] = useState<string[]>([]);
   const [newAliasInput, setNewAliasInput] = useState('');
 
+  // Party Searchable Combobox & List Search Filter
+  const [partyComboboxQuery, setPartyComboboxQuery] = useState('');
+  const [isPartyDropdownOpen, setIsPartyDropdownOpen] = useState(false);
+  const [partiesListSearchQuery, setPartiesListSearchQuery] = useState('');
+
   const { lastId: lastPartyId, nextId: nextPartyId } = useMemo(
     () => getLastAndNextId('PTY', parties, 101),
     [parties]
   );
 
+  const filteredPartyOptions = useMemo(() => {
+    const q = partyComboboxQuery.trim().toLowerCase();
+    if (!q) return parties;
+    return parties.filter(p => {
+      const matchId = p.id.toLowerCase().includes(q);
+      const matchName = (p.system_name || p.party_name || '').toLowerCase().includes(q);
+      const matchCid = (p.cid_number || '').toLowerCase().includes(q);
+      const matchBank = (p.bank_name || '').toLowerCase().includes(q);
+      const matchAlias = Array.isArray(p.party_name_raw)
+        ? p.party_name_raw.some(a => a.toLowerCase().includes(q))
+        : typeof p.party_name_raw === 'string' && p.party_name_raw.toLowerCase().includes(q);
+      return matchId || matchName || matchCid || matchBank || matchAlias;
+    });
+  }, [parties, partyComboboxQuery]);
+
+  const displayedPartiesList = useMemo(() => {
+    const q = partiesListSearchQuery.trim().toLowerCase();
+    if (!q) return parties;
+    return parties.filter(p => {
+      const matchId = p.id.toLowerCase().includes(q);
+      const matchName = (p.system_name || p.party_name || '').toLowerCase().includes(q);
+      const matchCid = (p.cid_number || '').toLowerCase().includes(q);
+      const matchBank = (p.bank_name || '').toLowerCase().includes(q);
+      const matchAlias = Array.isArray(p.party_name_raw)
+        ? p.party_name_raw.some(a => a.toLowerCase().includes(q))
+        : typeof p.party_name_raw === 'string' && p.party_name_raw.toLowerCase().includes(q);
+      return matchId || matchName || matchCid || matchBank || matchAlias;
+    });
+  }, [parties, partiesListSearchQuery]);
+
   const openAddPartyDrawer = () => {
     setSelectedPartyId('NEW');
+    setPartyComboboxQuery('');
+    setIsPartyDropdownOpen(false);
     setPartySystemName('');
     setPartyGroupName('');
     setPartyCid('');
@@ -432,6 +579,8 @@ export const MastersModule: React.FC = () => {
 
   const openEditPartyDrawer = (p: Party) => {
     setSelectedPartyId(p.id);
+    setPartyComboboxQuery('');
+    setIsPartyDropdownOpen(false);
     setPartySystemName(p.system_name || p.party_name);
     setPartyGroupName(p.group_name || '');
     setPartyCid(p.cid_number || '');
@@ -574,7 +723,11 @@ export const MastersModule: React.FC = () => {
   const handleDeleteParty = () => {
     if (selectedPartyId === 'NEW') return;
     if (window.confirm(`Are you sure you want to delete Party ${selectedPartyId}?`)) {
-      deleteParty(selectedPartyId);
+      const res = deleteParty(selectedPartyId);
+      if (!res.success) {
+        alert(res.error || 'Failed to delete party.');
+        return;
+      }
       setIsPartyDrawerOpen(false);
       setFeedback(`Party ${selectedPartyId} deleted.`);
       setTimeout(() => setFeedback(null), 4000);
@@ -599,29 +752,29 @@ export const MastersModule: React.FC = () => {
         </div>
 
         {/* Subtabs and Actions */}
-        <div className="flex items-center gap-3 shrink-0 flex-wrap sm:flex-nowrap">
-          <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200 text-xs font-semibold">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 shrink-0 w-full xl:w-auto">
+          <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200 text-xs font-semibold overflow-x-auto max-w-full">
             <button
               onClick={() => setActiveSubTab('companies')}
-              className={`px-3 py-1.5 rounded-md transition ${activeSubTab === 'companies' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`px-3 py-1.5 rounded-md transition whitespace-nowrap cursor-pointer ${activeSubTab === 'companies' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               Companies
             </button>
             <button
               onClick={() => setActiveSubTab('users')}
-              className={`px-3 py-1.5 rounded-md transition ${activeSubTab === 'users' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`px-3 py-1.5 rounded-md transition whitespace-nowrap cursor-pointer ${activeSubTab === 'users' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               Users & Roles
             </button>
             <button
               onClick={() => setActiveSubTab('accounts')}
-              className={`px-3 py-1.5 rounded-md transition ${activeSubTab === 'accounts' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`px-3 py-1.5 rounded-md transition whitespace-nowrap cursor-pointer ${activeSubTab === 'accounts' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               Bank Accounts
             </button>
             <button
               onClick={() => setActiveSubTab('parties')}
-              className={`px-3 py-1.5 rounded-md transition ${activeSubTab === 'parties' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`px-3 py-1.5 rounded-md transition whitespace-nowrap cursor-pointer ${activeSubTab === 'parties' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               Parties
             </button>
@@ -635,7 +788,7 @@ export const MastersModule: React.FC = () => {
               else if (activeSubTab === 'accounts') openAddAccountDrawer();
               else if (activeSubTab === 'parties') openAddPartyDrawer();
             }}
-            className="flex items-center space-x-1.5 px-3.5 py-2 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-bold transition shadow-sm cursor-pointer whitespace-nowrap shrink-0"
+            className="flex items-center justify-center space-x-1.5 px-3.5 py-2 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-bold transition shadow-sm cursor-pointer whitespace-nowrap w-full sm:w-auto shrink-0"
           >
             <Plus className="w-4 h-4" />
             <span>
@@ -692,7 +845,11 @@ export const MastersModule: React.FC = () => {
                     <button
                       onClick={() => {
                         if (window.confirm(`Delete Company ${c.id} (${c.full_name})?`)) {
-                          deleteCompany(c.id);
+                          const res = deleteCompany(c.id);
+                          if (!res.success) {
+                            alert(res.error || 'Failed to delete company.');
+                            return;
+                          }
                           setFeedback(`Company ${c.id} deleted.`);
                           setTimeout(() => setFeedback(null), 4000);
                         }
@@ -723,124 +880,312 @@ export const MastersModule: React.FC = () => {
       {/* ========================================================================= */}
       {activeSubTab === 'users' && (
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
-          <div className="flex items-center justify-between border-b pb-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-3">
             <div>
               <h2 className="text-xs font-bold uppercase tracking-wider text-slate-800">
-                Team Users & Company Permissions
+                Team Users, Passwords & Access Governance
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                Admin assigns which companies each Manager may work with. Admins & Accountant have universal access.
+                Admin exclusive user creation, role assignment, and password reset approvals.
               </p>
             </div>
-            <span className="text-[11px] font-mono text-slate-500 bg-slate-100 px-2.5 py-1 rounded">
-              Last ID: <strong className="text-slate-800">{lastUserId}</strong>
-            </span>
+
+            {/* View switcher for Admins */}
+            {currentRole === 'Admin' ? (
+              <div className="flex items-center space-x-1.5 bg-slate-100 p-1 rounded-lg">
+                <button
+                  type="button"
+                  onClick={() => setUserTabMode('users')}
+                  className={`px-3 py-1 rounded text-xs font-bold transition cursor-pointer ${
+                    userTabMode === 'users'
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Team Members ({allUsers.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUserTabMode('resets')}
+                  className={`px-3 py-1 rounded text-xs font-bold transition flex items-center space-x-1.5 cursor-pointer ${
+                    userTabMode === 'resets'
+                      ? 'bg-rose-800 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Key className="w-3 h-3" />
+                  <span>Reset Requests</span>
+                  {passwordResetRequests.filter(r => r.status === 'pending').length > 0 && (
+                    <span className="px-1.5 py-0.2 bg-rose-500 text-white rounded-full text-[10px] font-mono font-bold">
+                      {passwordResetRequests.filter(r => r.status === 'pending').length}
+                    </span>
+                  )}
+                </button>
+              </div>
+            ) : (
+              <span className="text-[11px] font-mono text-slate-500 bg-slate-100 px-2.5 py-1 rounded">
+                Last ID: <strong className="text-slate-800">{lastUserId}</strong>
+              </span>
+            )}
           </div>
 
-          <div className="divide-y divide-slate-100">
-            {allUsers.map(u => {
-              const roleObj = accessLevels.find(a => a.id === u.access_level_id);
-              const role = roleObj?.level_type || 'Staff';
-              const assigned = userCompanies.filter(uc => uc.user_id === u.id);
+          {/* VIEW A: PASSWORD RESET REQUESTS QUEUE (ADMIN ONLY) */}
+          {userTabMode === 'resets' && currentRole === 'Admin' ? (
+            <div className="space-y-4">
+              <div className="p-3.5 bg-rose-50/60 border border-rose-200 rounded-xl flex items-center justify-between text-xs text-rose-900">
+                <div className="flex items-center space-x-2">
+                  <Shield className="w-4 h-4 text-rose-700 shrink-0" />
+                  <span>
+                    When team members request a password reset on the login page, their requests arrive here in realtime. You can approve with a generated temporary password.
+                  </span>
+                </div>
+                <span className="font-mono text-[11px] font-bold text-rose-800 bg-rose-200/80 px-2 py-0.5 rounded shrink-0">
+                  {passwordResetRequests.filter(r => r.status === 'pending').length} Pending
+                </span>
+              </div>
 
-              return (
-                <div key={u.id} className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-                  <div>
-                    <div className="flex items-center space-x-2">
-                      <span className="font-mono font-bold text-slate-700">{u.id}</span>
-                      <strong className="text-slate-900 text-sm">{u.full_name}</strong>
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                          role === 'Admin'
-                            ? 'bg-rose-100 text-rose-800'
-                            : role === 'Accountant'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : role === 'Manager'
-                            ? 'bg-amber-100 text-amber-800'
-                            : 'bg-slate-100 text-slate-800'
-                        }`}
-                      >
-                        {role}
-                      </span>
-                      {u.access_role_ids && u.access_role_ids.length > 1 && (
-                        <span className="text-[10px] text-slate-500 font-medium">
-                          (+{u.access_role_ids.length - 1} more roles)
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-slate-500 text-[11px] mt-0.5">{u.email}</p>
-                  </div>
+              {passwordResetRequests.length === 0 ? (
+                <div className="text-center py-10 border border-dashed border-slate-200 rounded-xl text-slate-400 text-xs">
+                  No password reset requests currently in queue.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs text-slate-800 border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 font-bold uppercase tracking-wider text-[10px] text-slate-500">
+                        <th className="py-2.5 px-3">User / Email</th>
+                        <th className="py-2.5 px-3">6-Digit Code</th>
+                        <th className="py-2.5 px-3">Status</th>
+                        <th className="py-2.5 px-3">Requested Time</th>
+                        <th className="py-2.5 px-3">Temporary Credentials</th>
+                        <th className="py-2.5 px-3 text-right">Admin Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 font-medium">
+                      {passwordResetRequests.map(req => {
+                        const userMatch = allUsers.find(u => u.email.toLowerCase() === req.email.toLowerCase());
+                        const isExpired = new Date(req.expires_at) < new Date();
 
-                  <div className="flex items-center space-x-4">
-                    {/* Entity Scoping Status */}
-                    {role === 'Admin' || role === 'Accountant' ? (
-                      <span className="text-emerald-700 font-semibold text-[11px] flex items-center space-x-1">
-                        <Shield className="w-3 h-3" />
-                        <span>Access to All Companies (Global)</span>
-                      </span>
-                    ) : role === 'Staff' ? (
-                      <span className="text-slate-400 text-[11px]">Transaction Entry & View Only</span>
-                    ) : (
-                      <div className="flex items-center space-x-2">
-                        <span className="text-slate-500 text-[11px]">Assigned:</span>
-                        {assigned.length === 0 ? (
-                          <span className="text-rose-600 font-semibold text-[11px]">None</span>
-                        ) : (
-                          <div className="flex items-center space-x-1">
-                            {assigned.map(uc => (
-                              <span key={uc.company_id} className="bg-slate-200 px-1.5 py-0.5 rounded font-mono text-[10px] font-bold">
-                                {uc.company_id}
+                        return (
+                          <tr key={req.id} className="hover:bg-slate-50/60 transition">
+                            <td className="py-3 px-3">
+                              <div className="font-bold text-slate-900">{userMatch ? userMatch.full_name : req.email}</div>
+                              <div className="text-[11px] text-slate-500">{req.email}</div>
+                            </td>
+                            <td className="py-3 px-3">
+                              <span className="font-mono font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded text-[11px]">
+                                {req.reset_code}
                               </span>
-                            ))}
-                          </div>
-                        )}
-                        {currentRole === 'Admin' && (
-                          <select
-                            onChange={e => {
-                              if (e.target.value) {
-                                assignCompanyToUser(u.id, e.target.value);
-                                e.target.value = '';
-                              }
-                            }}
-                            className="text-[11px] bg-white border border-slate-300 rounded px-2 py-1 text-slate-700 cursor-pointer"
-                          >
-                            <option value="">+ Assign Company</option>
-                            {companies.filter(c => !assigned.some(a => a.company_id === c.id)).map(c => (
-                              <option key={c.id} value={c.id}>{c.id}: {c.full_name}</option>
-                            ))}
-                          </select>
+                            </td>
+                            <td className="py-3 px-3">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                  req.status === 'approved'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : req.status === 'completed'
+                                    ? 'bg-blue-100 text-blue-800'
+                                    : req.status === 'rejected'
+                                    ? 'bg-slate-100 text-slate-600'
+                                    : isExpired
+                                    ? 'bg-rose-100 text-rose-700'
+                                    : 'bg-amber-100 text-amber-800'
+                                }`}
+                              >
+                                {isExpired && req.status === 'pending' ? 'Expired' : req.status}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3 text-[11px] text-slate-500">
+                              {new Date(req.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} &bull;{' '}
+                              {new Date(req.created_at).toLocaleDateString()}
+                            </td>
+                            <td className="py-3 px-3">
+                              {req.temporary_password ? (
+                                <div className="flex items-center space-x-1.5 font-mono text-[11px] text-slate-900">
+                                  <span>{req.temporary_password}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(req.temporary_password || '');
+                                      alert('Copied temporary password to clipboard!');
+                                    }}
+                                    className="text-slate-400 hover:text-slate-700 p-0.5 cursor-pointer"
+                                    title="Copy temporary password"
+                                  >
+                                    <Copy className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="text-slate-400 text-[11px]">&mdash;</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-3 text-right">
+                              {req.status === 'pending' && !isExpired ? (
+                                <div className="flex items-center justify-end space-x-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleApproveResetRequest(req)}
+                                    className="px-2.5 py-1 bg-emerald-700 hover:bg-emerald-800 text-white rounded text-[11px] font-bold transition flex items-center space-x-1 cursor-pointer"
+                                    title="Approve and generate temporary password"
+                                  >
+                                    <Check className="w-3 h-3" />
+                                    <span>Approve & Set Temp</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRejectResetRequest(req.id)}
+                                    className="px-2 py-1 bg-slate-100 hover:bg-rose-100 text-slate-600 hover:text-rose-700 rounded text-[11px] font-bold transition cursor-pointer"
+                                    title="Reject request"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="text-[11px] text-slate-400 italic">Resolved</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          ) : (
+            /* VIEW B: TEAM MEMBERS LIST */
+            <div className="divide-y divide-slate-100">
+              {allUsers.map(u => {
+                const roleObj = accessLevels.find(a => a.id === u.access_level_id);
+                const role = roleObj?.level_type || 'Staff';
+                const assigned = userCompanies.filter(uc => uc.user_id === u.id);
+
+                return (
+                  <div key={u.id} className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                    <div>
+                      <div className="flex items-center space-x-2">
+                        <span className="font-mono font-bold text-slate-700">{u.id}</span>
+                        <strong className="text-slate-900 text-sm">{u.full_name}</strong>
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                            role === 'Admin'
+                              ? 'bg-rose-100 text-rose-800'
+                              : role === 'Accountant'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : role === 'Manager'
+                              ? 'bg-amber-100 text-amber-800'
+                              : 'bg-slate-100 text-slate-800'
+                          }`}
+                        >
+                          {role}
+                        </span>
+                        {u.access_role_ids && u.access_role_ids.length > 1 && (
+                          <span className="text-[10px] text-slate-500 font-medium">
+                            (+{u.access_role_ids.length - 1} more roles)
+                          </span>
                         )}
                       </div>
-                    )}
+                      <p className="text-slate-500 text-[11px] mt-0.5">{u.email}</p>
+                    </div>
 
-                    {/* Edit / Delete Buttons */}
-                    <div className="flex items-center space-x-1 border-l pl-3 border-slate-200">
-                      <button
-                        onClick={() => openEditUserDrawer(u)}
-                        className="p-1 text-slate-400 hover:text-rose-700 hover:bg-rose-50 rounded transition cursor-pointer"
-                        title="Edit User"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => {
-                          if (window.confirm(`Delete User ${u.id} (${u.full_name})?`)) {
-                            deleteUser(u.id);
-                            setFeedback(`User ${u.id} deleted.`);
-                            setTimeout(() => setFeedback(null), 4000);
-                          }
-                        }}
-                        className="p-1 text-slate-400 hover:text-rose-700 hover:bg-rose-50 rounded transition cursor-pointer"
-                        title="Delete User"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                    <div className="flex items-center space-x-4">
+                      {/* Entity Scoping Status */}
+                      {role === 'Admin' || role === 'Accountant' ? (
+                        <span className="text-emerald-700 font-semibold text-[11px] flex items-center space-x-1">
+                          <Shield className="w-3 h-3" />
+                          <span>Access to All Companies (Global)</span>
+                        </span>
+                      ) : role === 'Staff' ? (
+                        <span className="text-slate-400 text-[11px]">Transaction Entry & View Only</span>
+                      ) : (
+                        <div className="flex items-center space-x-2">
+                          <span className="text-slate-500 text-[11px]">Assigned:</span>
+                          {assigned.length === 0 ? (
+                            <span className="text-rose-600 font-semibold text-[11px]">None</span>
+                          ) : (
+                            <div className="flex items-center space-x-1">
+                              {assigned.map(uc => (
+                                <span key={uc.company_id} className="bg-slate-200 px-1.5 py-0.5 rounded font-mono text-[10px] font-bold">
+                                  {uc.company_id}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {currentRole === 'Admin' && (
+                            <select
+                              onChange={e => {
+                                if (e.target.value) {
+                                  assignCompanyToUser(u.id, e.target.value);
+                                  e.target.value = '';
+                                }
+                              }}
+                              className="text-[11px] bg-white border border-slate-300 rounded px-2 py-1 text-slate-700 cursor-pointer"
+                            >
+                              <option value="">+ Assign Company</option>
+                              {companies.filter(c => !assigned.some(a => a.company_id === c.id)).map(c => (
+                                <option key={c.id} value={c.id}>{c.id}: {c.full_name}</option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Status Toggle & Edit / Delete Buttons - Strictly for Admin */}
+                      {currentRole === 'Admin' ? (
+                        <div className="flex items-center space-x-2 border-l pl-3 border-slate-200">
+                          {/* Active / Inactive Status Toggle */}
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const res = await toggleUserActiveStatus(u.id);
+                              if (!res.success) alert(res.error || 'Failed to update user status.');
+                            }}
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer transition flex items-center space-x-1 ${
+                              u.is_active !== false 
+                                ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200' 
+                                : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                            }`}
+                            title={u.is_active !== false ? 'Active user (Click to Deactivate)' : 'Deactivated user (Click to Activate)'}
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full ${u.is_active !== false ? 'bg-emerald-600' : 'bg-slate-500'}`} />
+                            <span>{u.is_active !== false ? 'Active' : 'Deactivated'}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => openEditUserDrawer(u)}
+                            className="p-1 text-slate-400 hover:text-rose-700 hover:bg-rose-50 rounded transition cursor-pointer"
+                            title="Edit User & Manage Password"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (window.confirm(`Delete User ${u.id} (${u.full_name})?`)) {
+                                const res = deleteUser(u.id);
+                                if (!res.success) {
+                                  alert(res.error || 'Failed to delete user.');
+                                  return;
+                                }
+                                setFeedback(`User ${u.id} deleted.`);
+                                setTimeout(() => setFeedback(null), 4000);
+                              }
+                            }}
+                            className="p-1 text-slate-400 hover:text-rose-700 hover:bg-rose-50 rounded transition cursor-pointer"
+                            title="Delete User"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-[10px] text-slate-400 italic">Managed by Admin</span>
+                      )}
                     </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -892,8 +1237,12 @@ export const MastersModule: React.FC = () => {
                       </button>
                       <button
                         onClick={() => {
-                          if (window.confirm(`Delete Account ${acc.id} (${acc.bank_name})?`)) {
-                            deleteAccount(acc.id);
+                          if (window.confirm(`Delete Bank Account ${acc.id} (${acc.bank_name})?`)) {
+                            const res = deleteAccount(acc.id);
+                            if (!res.success) {
+                              alert(res.error || 'Failed to delete bank account.');
+                              return;
+                            }
                             setFeedback(`Account ${acc.id} deleted.`);
                             setTimeout(() => setFeedback(null), 4000);
                           }
@@ -932,66 +1281,105 @@ export const MastersModule: React.FC = () => {
       {/* ========================================================================= */}
       {activeSubTab === 'parties' && (
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
-          <div className="flex items-center justify-between border-b pb-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b pb-3 gap-3">
             <div>
               <h2 className="text-xs font-bold uppercase tracking-wider text-slate-800">
-                Registered Outside Parties ({parties.length})
+                Registered Outside Parties ({displayedPartiesList.length} of {parties.length})
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
                 Clean Party System Names, raw aliases arrays (`party_name_raw`), CID customer tags, and banking coordinates.
               </p>
             </div>
-            <span className="text-[11px] font-mono text-slate-500 bg-slate-100 px-2.5 py-1 rounded">
-              Last ID: <strong className="text-slate-800">{lastPartyId}</strong>
-            </span>
+            <div className="flex items-center space-x-3">
+              <div className="relative w-full sm:w-64">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  value={partiesListSearchQuery}
+                  onChange={e => setPartiesListSearchQuery(e.target.value)}
+                  placeholder="Filter parties by name, CID, ID..."
+                  className="w-full pl-8 pr-7 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 focus:bg-white focus:outline-none focus:border-rose-600"
+                />
+                {partiesListSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setPartiesListSearchQuery('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+              <span className="text-[11px] font-mono text-slate-500 bg-slate-100 px-2.5 py-1.5 rounded shrink-0">
+                Last ID: <strong className="text-slate-800">{lastPartyId}</strong>
+              </span>
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {parties.map(p => {
-              const aliases = Array.isArray(p.party_name_raw)
-                ? p.party_name_raw
-                : p.party_name_raw
-                ? [p.party_name_raw]
-                : p.party_name
-                ? [p.party_name]
-                : [];
+          {displayedPartiesList.length === 0 ? (
+            <div className="p-8 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200">
+              <p className="text-xs text-slate-500 mb-2">
+                No parties found matching &ldquo;{partiesListSearchQuery}&rdquo;.
+              </p>
+              <button
+                type="button"
+                onClick={() => setPartiesListSearchQuery('')}
+                className="px-3 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded text-xs font-semibold cursor-pointer"
+              >
+                Clear Search Filter
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {displayedPartiesList.map(p => {
+                const aliases = Array.isArray(p.party_name_raw)
+                  ? p.party_name_raw
+                  : p.party_name_raw
+                  ? [p.party_name_raw]
+                  : p.party_name
+                  ? [p.party_name]
+                  : [];
 
-              return (
-                <div
-                  key={p.id}
-                  className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-white hover:border-rose-300 transition space-y-2.5 text-xs shadow-xs flex flex-col justify-between"
-                >
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-rose-950 font-mono text-sm">{p.id}</span>
-                      <div className="flex items-center space-x-1">
-                        {p.cid_number && (
-                          <span className="px-2 py-0.5 bg-purple-100 text-purple-800 font-bold rounded font-mono text-[10px]">
-                            {p.cid_number}
-                          </span>
-                        )}
-                        <button
-                          onClick={() => openEditPartyDrawer(p)}
-                          className="p-1 text-slate-400 hover:text-rose-700 hover:bg-rose-50 rounded transition cursor-pointer"
-                          title="Edit Party"
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => {
-                            if (window.confirm(`Delete Party ${p.id} (${p.system_name || p.party_name})?`)) {
-                              deleteParty(p.id);
-                              setFeedback(`Party ${p.id} deleted.`);
-                              setTimeout(() => setFeedback(null), 4000);
-                            }
-                          }}
-                          className="p-1 text-slate-400 hover:text-rose-700 hover:bg-rose-50 rounded transition cursor-pointer"
-                          title="Delete Party"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                return (
+                  <div
+                    key={p.id}
+                    className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-white hover:border-rose-300 transition space-y-2.5 text-xs shadow-xs flex flex-col justify-between"
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-rose-950 font-mono text-sm">{p.id}</span>
+                        <div className="flex items-center space-x-1">
+                          {p.cid_number && (
+                            <span className="px-2 py-0.5 bg-purple-100 text-purple-800 font-bold rounded font-mono text-[10px]">
+                              {p.cid_number}
+                            </span>
+                          )}
+                          <button
+                            onClick={() => openEditPartyDrawer(p)}
+                            className="p-1 text-slate-400 hover:text-rose-700 hover:bg-rose-50 rounded transition cursor-pointer"
+                            title="Edit Party"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (window.confirm(`Delete Party ${p.id} (${p.system_name || p.party_name})?`)) {
+                                const res = deleteParty(p.id);
+                                if (!res.success) {
+                                  alert(res.error || 'Failed to delete party.');
+                                  return;
+                                }
+                                setFeedback(`Party ${p.id} deleted.`);
+                                setTimeout(() => setFeedback(null), 4000);
+                              }
+                            }}
+                            className="p-1 text-slate-400 hover:text-rose-700 hover:bg-rose-50 rounded transition cursor-pointer"
+                            title="Delete Party"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
-                    </div>
 
                     <div>
                       <h3 className="font-bold text-slate-900 text-sm">{p.system_name || p.party_name}</h3>
@@ -1029,8 +1417,9 @@ export const MastersModule: React.FC = () => {
               );
             })}
           </div>
-        </div>
-      )}
+        )}
+      </div>
+    )}
 
       {/* ========================================================================= */}
       {/* SLIDE-OVER DRAWER 1: COMPANIES */}
@@ -1186,6 +1575,73 @@ export const MastersModule: React.FC = () => {
               })}
             </div>
           </div>
+
+          {/* SUB-SECTION: Admin-Only Password & Credentials Management */}
+          {currentRole === 'Admin' && (
+            <div className="p-4 bg-amber-50/80 border border-amber-200 rounded-xl space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-amber-950 text-xs flex items-center space-x-1.5">
+                  <Key className="w-3.5 h-3.5 text-amber-700" />
+                  <span>{selectedUserId === 'NEW' ? 'Initial Password (Admin Authority)' : 'Reset User Password'}</span>
+                </span>
+                <span className="text-[10px] font-mono font-bold text-amber-800 bg-amber-200/80 px-2 py-0.5 rounded">
+                  Bcrypt Hashed
+                </span>
+              </div>
+
+              <div>
+                <label className="text-[10px] uppercase font-bold text-amber-950 block mb-1">
+                  {selectedUserId === 'NEW' ? 'Set Initial Password' : 'New Password (Leave blank to keep existing)'}
+                  {selectedUserId === 'NEW' && <span className="text-rose-600"> *</span>}
+                </label>
+                <div className="relative">
+                  <input
+                    type={showUserPassword ? 'text' : 'password'}
+                    value={userPassword}
+                    onChange={e => setUserPasswordInput(e.target.value)}
+                    placeholder={selectedUserId === 'NEW' ? 'e.g. SR#7891!Staff' : 'Type new password to overwrite...'}
+                    className="w-full bg-white border border-amber-300 rounded-lg pl-3 pr-10 py-2 text-xs font-mono text-slate-900 focus:outline-none focus:border-amber-600"
+                    required={selectedUserId === 'NEW'}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowUserPassword(!showUserPassword)}
+                    className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                    title={showUserPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showUserPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+                <span className="text-[10px] text-amber-800 mt-1 block">
+                  Encrypted directly inside PostgreSQL with Bcrypt (`pgcrypto`). Cannot be leaked in plain text.
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const primaryRoleId = userSelectedRoles[0] || 'ACC4';
+                    const roleLevel = accessLevels.find(a => a.id === primaryRoleId)?.level_type || 'Staff';
+                    generateSecurePassword(roleLevel);
+                  }}
+                  className="py-1.5 px-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition flex items-center justify-center space-x-1 cursor-pointer"
+                >
+                  <Sparkles className="w-3 h-3" />
+                  <span>Auto-Generate</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={!userPassword.trim()}
+                  onClick={handleCopyCredentials}
+                  className="py-1.5 px-2 bg-white hover:bg-amber-100/60 border border-amber-300 text-amber-900 rounded-lg text-xs font-bold transition flex items-center justify-center space-x-1 disabled:opacity-50 cursor-pointer"
+                >
+                  {copiedPasswordNotice ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                  <span>{copiedPasswordNotice ? 'Copied!' : 'Copy Credentials'}</span>
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* SUB-SECTION: Create New Access Roles Dynamically */}
           <div className="p-4 bg-purple-50/70 border border-purple-200 rounded-xl space-y-3">
@@ -1456,21 +1912,171 @@ export const MastersModule: React.FC = () => {
         onDelete={selectedPartyId !== 'NEW' ? handleDeleteParty : undefined}
       >
         <div className="space-y-4">
-          {/* Party ID Selector */}
-          <div>
-            <label className="block font-bold text-slate-700 uppercase mb-1">Party ID</label>
-            <select
-              value={selectedPartyId}
-              onChange={e => handlePartySelectChange(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 font-mono font-bold"
-            >
-              <option value="NEW">-- Create New ID ({nextPartyId}) --</option>
-              {parties.map(p => (
-                <option key={p.id} value={p.id}>
-                  {p.id}: {p.system_name || p.party_name}
-                </option>
-              ))}
-            </select>
+          {/* Searchable Party Combobox */}
+          <div className="relative">
+            <label className="block font-bold text-slate-700 uppercase mb-1 flex items-center justify-between text-xs">
+              <span>Select / Search Existing Party</span>
+              {selectedPartyId !== 'NEW' ? (
+                <button
+                  type="button"
+                  onClick={() => handlePartySelectChange('NEW')}
+                  className="text-[10px] font-bold text-rose-700 hover:text-rose-900 underline cursor-pointer"
+                >
+                  + Switch to New Party ({nextPartyId})
+                </button>
+              ) : (
+                <span className="text-[10px] text-emerald-700 font-bold font-mono">
+                  Creating New ID: {nextPartyId}
+                </span>
+              )}
+            </label>
+
+            {/* Selected Party Summary Chip (when editing an existing party) */}
+            {selectedPartyId !== 'NEW' && (
+              <div className="mb-2 p-2 bg-rose-50/70 border border-rose-200 rounded-lg flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <span className="px-2 py-0.5 bg-rose-700 text-white rounded font-mono font-bold text-[11px]">
+                    {selectedPartyId}
+                  </span>
+                  <span className="font-semibold text-slate-900 text-xs truncate max-w-[240px]">
+                    {partySystemName || parties.find(p => p.id === selectedPartyId)?.system_name}
+                  </span>
+                  {partyCid && (
+                    <span className="px-1.5 py-0.5 bg-purple-100 text-purple-800 rounded font-mono text-[10px] font-bold">
+                      {partyCid}
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handlePartySelectChange('NEW')}
+                  className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                  title="Clear selection"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
+            {/* Combobox Search Input */}
+            <div className="relative">
+              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                value={partyComboboxQuery}
+                onChange={e => {
+                  setPartyComboboxQuery(e.target.value);
+                  setIsPartyDropdownOpen(true);
+                }}
+                onFocus={() => setIsPartyDropdownOpen(true)}
+                placeholder="Type to filter parties by Name, ID (PTY...), or CID..."
+                className="w-full bg-slate-50 border border-slate-300 rounded-lg pl-9 pr-16 py-2 text-xs text-slate-900 focus:outline-none focus:border-rose-600 focus:bg-white"
+              />
+              <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center space-x-1">
+                {partyComboboxQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setPartyComboboxQuery('')}
+                    className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setIsPartyDropdownOpen(!isPartyDropdownOpen)}
+                  className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
+                >
+                  <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isPartyDropdownOpen ? 'rotate-180' : ''}`} />
+                </button>
+              </div>
+            </div>
+
+            {/* Floating Dropdown Menu */}
+            {isPartyDropdownOpen && (
+              <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-2xl z-50 max-h-64 overflow-y-auto divide-y divide-slate-100">
+                {/* Option 1: Create New ID */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    handlePartySelectChange('NEW');
+                    setIsPartyDropdownOpen(false);
+                  }}
+                  className={`w-full text-left px-3.5 py-2.5 flex items-center justify-between text-xs transition cursor-pointer hover:bg-rose-50/70 ${
+                    selectedPartyId === 'NEW' ? 'bg-rose-50 font-bold text-rose-800' : 'text-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center space-x-2">
+                    <span className="px-1.5 py-0.5 bg-rose-200 text-rose-900 rounded font-mono text-[10px] font-bold">
+                      {nextPartyId}
+                    </span>
+                    <span>+ Create New Party ID</span>
+                  </div>
+                  {selectedPartyId === 'NEW' && <Check className="w-4 h-4 text-rose-700" />}
+                </button>
+
+                {/* Filtered Party Rows */}
+                {filteredPartyOptions.length > 0 ? (
+                  filteredPartyOptions.map(p => {
+                    const isSelected = selectedPartyId === p.id;
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => {
+                          handlePartySelectChange(p.id);
+                          setPartyComboboxQuery('');
+                          setIsPartyDropdownOpen(false);
+                        }}
+                        className={`w-full text-left px-3.5 py-2 flex items-center justify-between text-xs transition cursor-pointer hover:bg-slate-50 ${
+                          isSelected ? 'bg-rose-50/60 font-semibold' : ''
+                        }`}
+                      >
+                        <div className="min-w-0 pr-2">
+                          <div className="flex items-center space-x-2">
+                            <span className="font-mono font-bold text-[11px] text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
+                              {p.id}
+                            </span>
+                            <span className="text-slate-900 font-medium truncate">
+                              {p.system_name || p.party_name}
+                            </span>
+                            {p.cid_number && (
+                              <span className="px-1.5 py-0.5 bg-purple-100 text-purple-800 rounded font-mono text-[10px] font-bold shrink-0">
+                                {p.cid_number}
+                              </span>
+                            )}
+                          </div>
+                          {p.bank_name && (
+                            <p className="text-[10px] text-slate-400 truncate mt-0.5">
+                              {p.bank_name} {p.account_number ? `• ${p.account_number}` : ''}
+                            </p>
+                          )}
+                        </div>
+                        {isSelected && <Check className="w-4 h-4 text-rose-700 shrink-0" />}
+                      </button>
+                    );
+                  })
+                ) : (
+                  <div className="p-4 text-center">
+                    <p className="text-xs text-slate-500 mb-2">
+                      No party found matching &ldquo;{partyComboboxQuery}&rdquo;
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handlePartySelectChange('NEW');
+                        setPartySystemName(partyComboboxQuery.trim());
+                        setPartyComboboxQuery('');
+                        setIsPartyDropdownOpen(false);
+                      }}
+                      className="px-3 py-1.5 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-bold transition cursor-pointer"
+                    >
+                      + Create as &ldquo;{partyComboboxQuery.trim()}&rdquo; ({nextPartyId})
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
             <span className="text-[10px] text-slate-400 mt-1 block">
               Reference: Last recorded party ID is <strong className="text-slate-700 font-mono">{lastPartyId}</strong>.
             </span>

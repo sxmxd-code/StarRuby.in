@@ -60,16 +60,25 @@ const MainLayout: React.FC = () => {
     }
   };
 
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const { lastRealtimeNotice } = useApp();
 
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden bg-slate-50/70 font-sans text-slate-900 relative">
-      <Header />
+      <Header
+        onToggleMobileNav={() => setIsMobileNavOpen(prev => !prev)}
+        isMobileNavOpen={isMobileNavOpen}
+      />
 
-      <div className="flex-1 flex overflow-hidden min-h-0">
-        <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
+      <div className="flex-1 flex overflow-hidden min-h-0 relative">
+        <Sidebar
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          isOpenMobile={isMobileNavOpen}
+          onCloseMobile={() => setIsMobileNavOpen(false)}
+        />
 
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 w-full min-h-0">
+        <main className="flex-1 overflow-y-auto p-3 sm:p-5 lg:p-8 w-full min-h-0">
           {activeTab === 'dashboard' && <DashboardModule onNavigate={setActiveTab} />}
           {activeTab === 'masters' && <MastersModule />}
           {activeTab === 'user_entry' && <UserEntryModule />}

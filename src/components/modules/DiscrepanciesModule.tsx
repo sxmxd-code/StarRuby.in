@@ -59,9 +59,9 @@ export const DiscrepanciesModule: React.FC<{ onNavigateToMatch?: () => void }> =
 
   return (
     <div className="space-y-6">
-      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center space-x-3">
-          <span className="p-2 bg-rose-50 text-rose-700 rounded-lg">
+          <span className="p-2 bg-rose-50 text-rose-700 rounded-lg shrink-0">
             <AlertTriangle className="w-5 h-5" />
           </span>
           <div>
@@ -73,10 +73,10 @@ export const DiscrepanciesModule: React.FC<{ onNavigateToMatch?: () => void }> =
         </div>
 
         {/* Categories */}
-        <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200 text-xs font-semibold">
+        <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200 text-xs font-semibold overflow-x-auto max-w-full shrink-0">
           <button
             onClick={() => setActiveCategory('unconfirmed')}
-            className={`px-3 py-1.5 rounded-md transition ${
+            className={`px-3 py-1.5 rounded-md transition whitespace-nowrap ${
               activeCategory === 'unconfirmed' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'
             }`}
           >

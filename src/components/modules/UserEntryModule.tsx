@@ -1160,7 +1160,7 @@ export const UserEntryModule: React.FC = () => {
           </div>
 
           {/* Table Filters (Client Brief Page 22) */}
-          <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3 items-end text-xs">
+          <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end text-xs">
             {/* Start Date */}
             <div>
               <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">

@@ -75,7 +75,7 @@ export const StatementReconciliationModule: React.FC = () => {
 
       {/* Account Balance Summary Card */}
       {activeAccount && (
-        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs grid grid-cols-1 sm:grid-cols-4 gap-4 text-xs text-slate-800">
+        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs text-slate-800">
           <div>
             <span className="text-slate-500 block text-[10px] uppercase font-bold tracking-wider">Bank Account</span>
             <span className="font-bold text-sm text-slate-900">{activeAccount.bank_name}</span>

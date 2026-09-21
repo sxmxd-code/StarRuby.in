@@ -64,7 +64,7 @@ export const PendingQueueModule: React.FC = () => {
     <div className="space-y-6">
       
       {/* Header */}
-      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center space-x-3">
           <span className="p-2 bg-amber-50 text-amber-700 rounded-lg">
             <Clock className="w-5 h-5" />

@@ -1,8 +1,13 @@
 import React from 'react';
 import { useApp } from '../../context/AppContext';
-import { Building2, Crown, Calculator, Briefcase, BadgeCheck } from 'lucide-react';
+import { Building2, Crown, Calculator, Briefcase, BadgeCheck, Menu, X } from 'lucide-react';
 
-export const Header: React.FC = () => {
+interface HeaderProps {
+  onToggleMobileNav?: () => void;
+  isMobileNavOpen?: boolean;
+}
+
+export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav, isMobileNavOpen }) => {
   const {
     currentUser,
     currentRole,
@@ -51,23 +56,32 @@ export const Header: React.FC = () => {
 
   return (
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200/90 shadow-xs text-slate-900">
-      {/* Top Thin Ruby Line (Brand Signature from official store) */}
+      {/* Top Thin Ruby Line */}
       <div className="h-1 bg-gradient-to-r from-rose-700 via-rose-600 to-amber-500 w-full" />
 
-      <div className="w-full px-4 sm:px-6 flex items-center justify-between h-16">
+      <div className="w-full px-3 sm:px-6 flex items-center justify-between h-16">
         
-        {/* Left: Brand Logo & Tagline (Balanced horizontal layout, high-DPI scaling, no wrapping) */}
-        <div className="flex items-center space-x-3.5 shrink-0">
+        {/* Left: Hamburger (Mobile) & Brand Logo */}
+        <div className="flex items-center space-x-2 sm:space-x-3.5 shrink-0">
+          <button
+            type="button"
+            onClick={onToggleMobileNav}
+            className="lg:hidden p-2 -ml-1.5 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition cursor-pointer"
+            aria-label="Toggle Navigation Menu"
+          >
+            {isMobileNavOpen ? <X className="w-5 h-5 text-rose-700" /> : <Menu className="w-5 h-5" />}
+          </button>
+
           <img
             src="/star-ruby-banner.gif"
             alt="StarRuby.in"
-            className="h-9 sm:h-10 w-auto object-contain"
+            className="h-8 sm:h-10 w-auto object-contain"
             onError={(e) => {
               e.currentTarget.style.display = 'none';
             }}
           />
-          <div className="h-7 w-px bg-slate-200/90 mx-0.5 shrink-0" />
-          <div className="flex flex-col justify-center">
+          <div className="hidden sm:block h-7 w-px bg-slate-200/90 mx-0.5 shrink-0" />
+          <div className="hidden sm:flex flex-col justify-center">
             <div className="flex items-center space-x-2">
               <span className="text-sm font-bold text-slate-900 tracking-tight whitespace-nowrap">
                 Banking & Treasury
@@ -76,24 +90,24 @@ export const Header: React.FC = () => {
                 ERP
               </span>
             </div>
-            <span className="text-[11px] text-slate-500 font-medium tracking-normal whitespace-nowrap">
+            <span className="text-[11px] text-slate-500 font-medium tracking-normal whitespace-nowrap hidden xl:inline">
               StarRuby Group Treasury Governance
             </span>
           </div>
         </div>
 
         {/* Center: Entity Scope Selector & Realtime Connection Badge */}
-        <div className="flex items-center space-x-3">
-          <div className="hidden md:flex items-center space-x-2.5 bg-slate-50 hover:bg-slate-100/90 rounded-xl px-3.5 py-1.5 border border-slate-200/90 shadow-2xs transition">
-            <Building2 className="w-4 h-4 text-rose-700 shrink-0" />
+        <div className="flex items-center space-x-2 sm:space-x-3">
+          <div className="flex items-center space-x-1.5 sm:space-x-2.5 bg-slate-50 hover:bg-slate-100/90 rounded-xl px-2.5 sm:px-3.5 py-1.5 border border-slate-200/90 shadow-2xs transition max-w-[130px] sm:max-w-none">
+            <Building2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-rose-700 shrink-0" />
             <span className="text-[11px] font-bold uppercase text-slate-500 tracking-wider hidden lg:inline">Entity:</span>
             <select
               value={activeCompanyId}
               onChange={(e) => setActiveCompanyId(e.target.value)}
-              className="bg-transparent text-xs font-semibold text-slate-800 focus:outline-none cursor-pointer pr-2 py-0.5"
+              className="bg-transparent text-[11px] sm:text-xs font-semibold text-slate-800 focus:outline-none cursor-pointer pr-1 sm:pr-2 py-0.5 truncate w-full"
             >
               {currentRole === 'Admin' || currentRole === 'Accountant' || currentRole === 'Staff' ? (
-                <option value="ALL" className="bg-white text-slate-800">All Companies (Global View)</option>
+                <option value="ALL" className="bg-white text-slate-800">All (Global)</option>
               ) : null}
               {allowedCompanies.map((comp) => (
                 <option key={comp.id} value={comp.id} className="bg-white text-slate-800">
@@ -105,7 +119,7 @@ export const Header: React.FC = () => {
 
           {/* Realtime Live Pulse Indicator */}
           <div
-            className={`hidden sm:flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
+            className={`hidden md:flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
               isRealtimeConnected
                 ? 'bg-emerald-50/90 text-emerald-800 border-emerald-200/90 shadow-2xs'
                 : 'bg-amber-50/90 text-amber-800 border-amber-200/90 shadow-2xs'
@@ -126,29 +140,29 @@ export const Header: React.FC = () => {
                 }`}
               ></span>
             </span>
-            <span className="text-[11px] tracking-tight font-bold">
+            <span className="text-[11px] tracking-tight font-bold hidden lg:inline">
               {isRealtimeConnected ? 'Realtime Live' : 'Connecting...'}
             </span>
           </div>
         </div>
 
-        {/* Right: Executive Role-Badged User Identity (Color-Coded Role Logo, Name, Role Badge) */}
-        <div className={`flex items-center space-x-3 bg-white hover:bg-slate-50/90 pl-2.5 pr-4 py-2 rounded-2xl border border-slate-200/90 shadow-2xs hover:shadow-xs transition-all ${roleCfg.hoverBorder}`}>
+        {/* Right: Executive Role-Badged User Identity */}
+        <div className={`flex items-center space-x-2 sm:space-x-3 bg-white hover:bg-slate-50/90 p-1.5 sm:pl-2.5 sm:pr-4 sm:py-2 rounded-2xl border border-slate-200/90 shadow-2xs hover:shadow-xs transition-all ${roleCfg.hoverBorder} shrink-0`}>
           {/* 1. Color-Coded Role Logo */}
-          <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${roleCfg.iconBg}`} title={`Role: ${currentRole}`}>
-            <RoleIcon className="w-4.5 h-4.5 stroke-[2.2]" />
+          <div className={`w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center shrink-0 ${roleCfg.iconBg}`} title={`Role: ${currentRole} (${currentUser.full_name})`}>
+            <RoleIcon className="w-4 h-4 sm:w-4.5 sm:h-4.5 stroke-[2.2]" />
           </div>
 
           {/* 2. Full Name & 3. Role Badge */}
-          <div className="flex flex-col justify-center">
-            <span className="text-xs sm:text-[13px] font-bold text-slate-900 tracking-tight leading-none">
+          <div className="hidden sm:flex flex-col justify-center">
+            <span className="text-xs sm:text-[13px] font-bold text-slate-900 tracking-tight leading-none truncate max-w-[120px] lg:max-w-[170px]">
               {currentUser.full_name}
             </span>
             <div className="flex items-center space-x-1.5 mt-1">
               <span className={`px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wider rounded-md border ${roleCfg.badge} shadow-2xs leading-none`}>
                 {currentRole}
               </span>
-              <span className="flex items-center space-x-1 text-[10px] font-semibold text-slate-400 leading-none">
+              <span className="flex items-center space-x-1 text-[10px] font-semibold text-slate-400 leading-none hidden md:inline-flex">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
                 <span>Active</span>
               </span>
@@ -160,3 +174,4 @@ export const Header: React.FC = () => {
     </header>
   );
 };
+

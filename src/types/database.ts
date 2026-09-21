@@ -253,3 +253,16 @@ export interface AppSetting {
   setting_value: string;
   description: string;
 }
+
+export interface PasswordResetRequest {
+  id: string;
+  email: string;
+  user_id?: string;
+  reset_code: string;
+  status: 'pending' | 'approved' | 'completed' | 'rejected';
+  temporary_password?: string;
+  approved_by?: string;
+  expires_at: string;
+  created_at: string;
+  updated_at: string;
+}

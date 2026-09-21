@@ -118,18 +118,18 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="relative bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-5xl overflow-hidden max-h-[92vh] flex flex-col">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4">
+      <div className="relative bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-5xl overflow-hidden max-h-[96vh] sm:max-h-[92vh] flex flex-col">
         
         {/* Top Header Banner */}
-        <div className="bg-gradient-to-r from-rose-50/90 via-white to-slate-50 text-slate-900 p-5 border-b border-slate-200/90 flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <div className="p-2 bg-rose-100 rounded-xl border border-rose-200 text-rose-800">
+        <div className="bg-gradient-to-r from-rose-50/90 via-white to-slate-50 text-slate-900 p-3.5 sm:p-5 border-b border-slate-200/90 flex items-start sm:items-center justify-between gap-2">
+          <div className="flex items-start sm:items-center space-x-3">
+            <div className="p-2 bg-rose-100 rounded-xl border border-rose-200 text-rose-800 shrink-0">
               <Shield className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center space-x-2">
-                <h2 className="text-lg font-bold font-serif tracking-wide text-slate-900">{transaction.id}</h2>
+              <div className="flex items-center space-x-2 flex-wrap gap-y-1">
+                <h2 className="text-base sm:text-lg font-bold font-serif tracking-wide text-slate-900">{transaction.id}</h2>
                 <span className={`px-2 py-0.5 text-[10px] font-bold uppercase rounded-lg border ${
                   transaction.status === 'approved' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' :
                   transaction.status === 'in_approval' ? 'bg-amber-50 text-amber-800 border-amber-200' :
@@ -144,19 +144,19 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
                   {transaction.amount_confirmed} Amount
                 </span>
               </div>
-              <p className="text-xs text-slate-500 mt-0.5">
+              <p className="text-[11px] sm:text-xs text-slate-500 mt-0.5">
                 {company?.full_name} &bull; Account: {account?.bank_name} ({account?.account_number})
               </p>
             </div>
           </div>
 
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 p-1.5 rounded-xl hover:bg-slate-100 transition cursor-pointer">
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 p-1.5 rounded-xl hover:bg-slate-100 transition cursor-pointer shrink-0">
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Content Body */}
-        <div className="p-6 overflow-y-auto space-y-6 flex-1 bg-slate-50">
+        <div className="p-3.5 sm:p-6 overflow-y-auto space-y-4 sm:space-y-6 flex-1 bg-slate-50">
           
           {/* Feedback banner if any */}
           {approvalFeedback ? (
@@ -169,11 +169,11 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
           ) : null}
 
           {/* 3-Layer Approval Progress Gauge */}
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <div className="bg-white p-3.5 sm:p-4 rounded-xl border border-slate-200 shadow-sm">
             <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3">
               3-Layer Approval Journey
             </h4>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-4">
               
               {/* Layer 1 */}
               <div className={`p-3 rounded-lg border text-xs ${
@@ -417,20 +417,20 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
                   className="flex-1 bg-white border border-rose-200 rounded-lg px-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-rose-600 w-full"
                 />
 
-                <div className="flex items-center space-x-2 w-full sm:w-auto">
+                <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
                   {!layer2 && (
                     <button
                       onClick={() => handleApprove(2)}
-                      className="px-4 py-1.5 bg-rose-700 text-white rounded-lg text-xs font-bold hover:bg-rose-800 shadow-sm shrink-0"
+                      className="flex-1 sm:flex-none px-3.5 sm:px-4 py-2 sm:py-1.5 bg-rose-700 text-white rounded-lg text-xs font-bold hover:bg-rose-800 shadow-sm text-center"
                     >
-                      Layer 2 Approve (Ready for Accounting)
+                      Layer 2 Approve
                     </button>
                   )}
 
                   {layer2 && !layer3 && (
                     <button
                       onClick={() => handleApprove(3)}
-                      className="px-4 py-1.5 bg-emerald-700 text-white rounded-lg text-xs font-bold hover:bg-emerald-800 shadow-sm shrink-0"
+                      className="flex-1 sm:flex-none px-3.5 sm:px-4 py-2 sm:py-1.5 bg-emerald-700 text-white rounded-lg text-xs font-bold hover:bg-emerald-800 shadow-sm text-center"
                     >
                       Layer 3 Review & Close
                     </button>
@@ -438,7 +438,7 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
 
                   <button
                     onClick={() => handleReject(layer2 ? 3 : 2)}
-                    className="px-3 py-1.5 bg-slate-200 text-rose-900 rounded-lg text-xs font-semibold hover:bg-rose-200 shrink-0"
+                    className="px-3 py-2 sm:py-1.5 bg-slate-200 text-rose-900 rounded-lg text-xs font-semibold hover:bg-rose-200"
                   >
                     Reject
                   </button>

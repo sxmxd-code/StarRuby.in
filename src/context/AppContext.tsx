@@ -24,6 +24,7 @@ import {
   DocumentRecord,
   RecordVersion,
   AppSetting,
+  PasswordResetRequest,
 } from '../types/database';
 
 import {
@@ -100,16 +101,17 @@ interface AppContextType {
   // Operational Actions
   addCompany: (comp: Omit<Company, 'id' | 'created_at'>, customId?: string) => Company;
   updateCompany: (id: string, updates: Partial<Company>) => void;
-  deleteCompany: (id: string) => boolean;
+  deleteCompany: (id: string) => { success: boolean; error?: string };
 
-  addUser: (user: Omit<User, 'id' | 'created_at'>, customId?: string) => User;
+  addUser: (user: Omit<User, 'id' | 'created_at'>, customId?: string, initialPassword?: string) => User;
   updateUser: (id: string, updates: Partial<User>) => void;
-  deleteUser: (id: string) => boolean;
+  deleteUser: (id: string) => { success: boolean; error?: string };
+  toggleUserActiveStatus: (id: string) => Promise<{ success: boolean; error?: string }>;
   addAccessLevel: (level: AccessLevel) => void;
 
   addAccount: (acc: Omit<Account, 'id' | 'created_at'>, customId?: string) => Account;
   updateAccount: (id: string, updates: Partial<Account>) => void;
-  deleteAccount: (id: string) => boolean;
+  deleteAccount: (id: string) => { success: boolean; error?: string };
 
   addUserTransaction: (txn: Omit<UserTransaction, 'id' | 'date_of_entry' | 'status' | 'created_by' | 'created_at' | 'updated_at'>) => UserTransaction;
   addUserTransactionsBatch: (txns: Omit<UserTransaction, 'id' | 'date_of_entry' | 'status' | 'created_by' | 'created_at' | 'updated_at'>[]) => UserTransaction[];
@@ -128,7 +130,7 @@ interface AppContextType {
   
   addParty: (party: Omit<Party, 'id' | 'created_at'>, customId?: string) => Party;
   updateParty: (id: string, updates: Partial<Party>) => void;
-  deleteParty: (id: string) => boolean;
+  deleteParty: (id: string) => { success: boolean; error?: string };
   addPartyAliasTag: (partyId: string, aliasName: string) => void;
   removePartyAliasTag: (partyId: string, aliasName: string) => void;
   mapPartyAlias: (aliasId: string, partyId: string) => void;
@@ -156,6 +158,15 @@ interface AppContextType {
   lastRealtimeNotice: string | null;
   liveForexRates: LiveForexRates;
   refreshForexRates: () => Promise<void>;
+
+  // User Credentials & Password Reset
+  passwordResetRequests: PasswordResetRequest[];
+  setUserPassword: (email: string, password: string, role?: string, fullName?: string) => Promise<{ success: boolean; error?: string }>;
+  requestPasswordReset: (email: string) => Promise<{ success: boolean; requestId?: string; resetCode?: string; fullName?: string; error?: string }>;
+  approvePasswordReset: (requestId: string, tempPassword?: string) => Promise<{ success: boolean; error?: string }>;
+  rejectPasswordReset: (requestId: string) => Promise<{ success: boolean; error?: string }>;
+  completePasswordReset: (email: string, code: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
+  resetTestData: () => Promise<{ success: boolean; error?: string }>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -229,6 +240,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return loaded.filter(d => d.r2_bucket !== 'banking-docs-prod');
   });
   const [recordVersions, setRecordVersions] = useState<RecordVersion[]>(() => loadInitial('recordVersions', initialRecordVersions));
+  const [passwordResetRequests, setPasswordResetRequests] = useState<PasswordResetRequest[]>(() => loadInitial('passwordResetRequests', []));
 
   const [isRealtimeConnected, setIsRealtimeConnected] = useState<boolean>(false);
   const [lastRealtimeNotice, setLastRealtimeNotice] = useState<string | null>(null);
@@ -298,6 +310,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           docRes,
           verRes,
           setRes,
+          resetRes,
         ] = await Promise.all([
           client.from('companies').select('*'),
           client.from('users').select('*'),
@@ -317,6 +330,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           client.from('documents').select('*'),
           client.from('record_versions').select('*').order('changed_at', { ascending: false }),
           client.from('app_settings').select('*'),
+          client.from('password_reset_requests').select('*').order('created_at', { ascending: false }),
         ]);
 
         if (!isMounted) return;
@@ -392,6 +406,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (setRes.data && setRes.data.length > 0) {
           setAppSettings(setRes.data);
           save('appSettings', setRes.data);
+        }
+        if (resetRes.data && resetRes.data.length > 0) {
+          setPasswordResetRequests(resetRes.data as PasswordResetRequest[]);
+          save('passwordResetRequests', resetRes.data);
         }
       } catch (err) {
         console.warn('Supabase initial fetch skipped (operating with local cache):', err);
@@ -593,6 +611,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setAppSettings(prev => {
             const next = [...prev.filter(s => s.setting_key !== row.setting_key), row];
             save('appSettings', next);
+            return next;
+          });
+        }
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'password_reset_requests' }, (payload) => {
+        if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+          const row = payload.new as PasswordResetRequest;
+          setPasswordResetRequests(prev => {
+            const next = [row, ...prev.filter(r => r.id !== row.id)];
+            save('passwordResetRequests', next);
+            return next;
+          });
+          if (payload.eventType === 'INSERT') {
+            notifyRealtime(`Live Sync: Password reset requested by ${row.email}`);
+          }
+        } else if (payload.eventType === 'DELETE') {
+          const oldId = (payload.old as any).id;
+          setPasswordResetRequests(prev => {
+            const next = prev.filter(r => r.id !== oldId);
+            save('passwordResetRequests', next);
             return next;
           });
         }
@@ -1294,20 +1332,285 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const deleteCompany = (id: string): boolean => {
+  const deleteCompany = (id: string): { success: boolean; error?: string } => {
+    if (currentRole !== 'Admin') {
+      return { success: false, error: 'Unauthorized: Only Admins can delete companies.' };
+    }
     const existing = companies.find(c => c.id === id);
-    if (!existing) return false;
+    if (!existing) return { success: false, error: `Company ${id} does not exist.` };
+
+    // Safeguard 1: Active Accounts under this company
+    const linkedAccounts = accounts.filter(a => a.company_id === id);
+    if (linkedAccounts.length > 0) {
+      return {
+        success: false,
+        error: `Cannot delete company "${existing.full_name}" (${id}): It has ${linkedAccounts.length} active bank account(s) attached (${linkedAccounts.map(a => a.id).join(', ')}). Delete or reassign those bank accounts first.`,
+      };
+    }
+
+    // Safeguard 2: Active User Transactions under this company
+    const linkedAccIds = new Set(linkedAccounts.map(a => a.id));
+    const linkedTxns = userTransactions.filter(t => linkedAccIds.has(t.account_id));
+    if (linkedTxns.length > 0) {
+      return {
+        success: false,
+        error: `Cannot delete company "${existing.full_name}" (${id}): There are ${linkedTxns.length} financial transaction(s) recorded under its bank accounts.`,
+      };
+    }
+
+    // Remove user company assignments if any
+    const updatedUC = userCompanies.filter(uc => uc.company_id !== id);
+    if (updatedUC.length !== userCompanies.length) {
+      setUserCompanies(updatedUC);
+      save('userCompanies', updatedUC);
+      if (supabase) {
+        supabase.from('user_companies').delete().eq('company_id', id).then(() => {});
+      }
+    }
+
     const updated = companies.filter(c => c.id !== id);
     setCompanies(updated);
     save('companies', updated);
     if (supabase) {
       supabase.from('companies').delete().eq('id', id).then(() => {});
     }
-    return true;
+    return { success: true };
+  };
+
+  // User Credentials & Password Reset Methods
+  const setUserPassword = async (email: string, password: string, role: string = 'Staff', fullName: string = 'User'): Promise<{ success: boolean; error?: string }> => {
+    if (currentRole !== 'Admin') {
+      return { success: false, error: 'Unauthorized: Only Admins can set or reset passwords.' };
+    }
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !password || password.length < 6) {
+      return { success: false, error: 'Password must be at least 6 characters long.' };
+    }
+
+    if (supabase) {
+      try {
+        const { data, error } = await supabase.rpc('set_user_password', {
+          p_email: cleanEmail,
+          p_password: password,
+          p_role: role,
+          p_full_name: fullName,
+        });
+        if (error) {
+          console.warn('Supabase set_user_password RPC notice:', error.message);
+          const { error: upsertErr } = await supabase.from('user_credentials').upsert({
+            email: cleanEmail,
+            role,
+            full_name: fullName,
+            is_active: true,
+            updated_at: new Date().toISOString(),
+          }, { onConflict: 'email' });
+          if (upsertErr) console.warn('Fallback upsert notice:', upsertErr.message);
+        } else if (data && !data.success) {
+          return { success: false, error: data.error };
+        }
+      } catch (err: any) {
+        console.warn('Set user password error:', err);
+      }
+    }
+
+    return { success: true };
+  };
+
+  const requestPasswordReset = async (email: string): Promise<{ success: boolean; requestId?: string; resetCode?: string; fullName?: string; error?: string }> => {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) {
+      return { success: false, error: 'Please enter your official email address.' };
+    }
+
+    if (supabase) {
+      try {
+        const { data, error } = await supabase.rpc('request_password_reset', { p_email: cleanEmail });
+        if (error) {
+          console.warn('request_password_reset RPC error:', error.message);
+        } else if (data) {
+          if (!data.success) {
+            return { success: false, error: data.error };
+          }
+          return {
+            success: true,
+            requestId: data.request_id,
+            resetCode: data.reset_code,
+            fullName: data.full_name,
+          };
+        }
+      } catch (err) {
+        console.warn('Reset request exception:', err);
+      }
+    }
+
+    // Local fallback for preview/offline
+    const userFound = users.find(u => u.email.toLowerCase() === cleanEmail);
+    if (!userFound) {
+      return { success: false, error: 'No active user account found with this email.' };
+    }
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const newReq: PasswordResetRequest = {
+      id: `REQ-${Date.now()}`,
+      email: cleanEmail,
+      user_id: userFound.id,
+      reset_code: code,
+      status: 'pending',
+      expires_at: new Date(Date.now() + 3600000).toISOString(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    const updated = [newReq, ...passwordResetRequests.filter(r => !(r.email.toLowerCase() === cleanEmail && r.status === 'pending'))];
+    setPasswordResetRequests(updated);
+    save('passwordResetRequests', updated);
+
+    if (supabase) {
+      supabase.from('password_reset_requests').insert([newReq]).then(() => {});
+    }
+
+    return {
+      success: true,
+      requestId: newReq.id,
+      resetCode: code,
+      fullName: userFound.full_name,
+    };
+  };
+
+  const approvePasswordReset = async (requestId: string, tempPassword?: string): Promise<{ success: boolean; error?: string }> => {
+    if (currentRole !== 'Admin') {
+      return { success: false, error: 'Unauthorized: Only Admins can approve password resets.' };
+    }
+
+    const req = passwordResetRequests.find(r => r.id === requestId);
+    if (!req) return { success: false, error: 'Reset request not found.' };
+
+    if (supabase) {
+      try {
+        const { data, error } = await supabase.rpc('approve_password_reset', {
+          p_request_id: requestId,
+          p_admin_id: currentUser.id,
+          p_temporary_password: tempPassword || null,
+        });
+        if (error) {
+          console.warn('approve_password_reset RPC error:', error.message);
+        }
+      } catch (err) {
+        console.warn('approve_password_reset exception:', err);
+      }
+    }
+
+    const updated = passwordResetRequests.map(r => {
+      if (r.id === requestId) {
+        return {
+          ...r,
+          status: 'approved' as const,
+          temporary_password: tempPassword,
+          approved_by: currentUser.id,
+          updated_at: new Date().toISOString(),
+        };
+      }
+      return r;
+    });
+    setPasswordResetRequests(updated);
+    save('passwordResetRequests', updated);
+
+    if (supabase) {
+      supabase.from('password_reset_requests').update({
+        status: 'approved',
+        temporary_password: tempPassword,
+        approved_by: currentUser.id,
+        updated_at: new Date().toISOString(),
+      }).eq('id', requestId).then(() => {});
+    }
+
+    return { success: true };
+  };
+
+  const rejectPasswordReset = async (requestId: string): Promise<{ success: boolean; error?: string }> => {
+    if (currentRole !== 'Admin') {
+      return { success: false, error: 'Unauthorized: Only Admins can reject password resets.' };
+    }
+
+    const updated = passwordResetRequests.map(r => {
+      if (r.id === requestId) {
+        return {
+          ...r,
+          status: 'rejected' as const,
+          approved_by: currentUser.id,
+          updated_at: new Date().toISOString(),
+        };
+      }
+      return r;
+    });
+    setPasswordResetRequests(updated);
+    save('passwordResetRequests', updated);
+
+    if (supabase) {
+      supabase.from('password_reset_requests').update({
+        status: 'rejected',
+        approved_by: currentUser.id,
+        updated_at: new Date().toISOString(),
+      }).eq('id', requestId).then(() => {});
+    }
+
+    return { success: true };
+  };
+
+  const completePasswordReset = async (email: string, code: string, newPassword: string): Promise<{ success: boolean; error?: string }> => {
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanCode = code.trim();
+    if (!cleanEmail || !cleanCode || !newPassword || newPassword.length < 6) {
+      return { success: false, error: 'Please provide email, 6-digit code, and a password with at least 6 characters.' };
+    }
+
+    if (supabase) {
+      try {
+        const { data, error } = await supabase.rpc('complete_password_reset', {
+          p_email: cleanEmail,
+          p_reset_code: cleanCode,
+          p_new_password: newPassword,
+        });
+        if (error) {
+          console.warn('complete_password_reset RPC notice:', error.message);
+        } else if (data) {
+          if (!data.success) {
+            return { success: false, error: data.error };
+          }
+          return { success: true };
+        }
+      } catch (err) {
+        console.warn('complete_password_reset exception:', err);
+      }
+    }
+
+    // Local fallback
+    const req = passwordResetRequests.find(
+      r => r.email.toLowerCase() === cleanEmail && r.reset_code === cleanCode && (r.status === 'pending' || r.status === 'approved')
+    );
+    if (!req) {
+      return { success: false, error: 'Invalid or expired 6-digit security code.' };
+    }
+
+    const updated = passwordResetRequests.map(r => (r.id === req.id ? { ...r, status: 'completed' as const, updated_at: new Date().toISOString() } : r));
+    setPasswordResetRequests(updated);
+    save('passwordResetRequests', updated);
+
+    if (supabase) {
+      supabase.from('password_reset_requests').update({
+        status: 'completed',
+        updated_at: new Date().toISOString(),
+      }).eq('id', req.id).then(() => {});
+    }
+
+    return { success: true };
   };
 
   // Operational Action 7c: User & Roles CRUD
-  const addUser = (data: Omit<User, 'id' | 'created_at'>, customId?: string): User => {
+  const addUser = (data: Omit<User, 'id' | 'created_at'>, customId?: string, initialPassword?: string): User => {
+    if (currentRole !== 'Admin') {
+      console.warn('Unauthorized: Only Admins can create new users.');
+      return { ...data, id: 'ERR', created_at: new Date().toISOString() };
+    }
+
     let newId = customId;
     if (!newId) {
       const maxNum = users.reduce((acc, u) => {
@@ -1327,10 +1630,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (supabase) {
       supabase.from('users').insert([newUser]).then(() => {});
     }
+
+    // If initial password was provided and user is Admin, set it securely
+    if (initialPassword && initialPassword.trim()) {
+      const roleLevel = accessLevels.find(a => a.id === data.access_level_id)?.level_type || 'Staff';
+      setUserPassword(data.email, initialPassword.trim(), roleLevel, data.full_name);
+    }
+
     return newUser;
   };
 
   const updateUser = (id: string, updates: Partial<User>) => {
+    if (currentRole !== 'Admin') return;
     const existing = users.find(u => u.id === id);
     if (!existing) return;
     const updated = { ...existing, ...updates };
@@ -1348,16 +1659,80 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const deleteUser = (id: string): boolean => {
+  const deleteUser = (id: string): { success: boolean; error?: string } => {
+    if (currentRole !== 'Admin') {
+      return { success: false, error: 'Unauthorized: Only Admins can delete users.' };
+    }
     const existing = users.find(u => u.id === id);
-    if (!existing) return false;
+    if (!existing) return { success: false, error: `User ${id} does not exist.` };
+
+    if (id === currentUser.id) {
+      return { success: false, error: 'Cannot delete your own active session user account.' };
+    }
+
+    // Safeguard 1: Created Transactions
+    const createdTxns = userTransactions.filter(t => t.created_by === id);
+    if (createdTxns.length > 0) {
+      return {
+        success: false,
+        error: `Cannot delete user "${existing.full_name}" (${id}): User has created ${createdTxns.length} financial transaction(s). Please deactivate this user instead to preserve the immutable audit trail.`,
+      };
+    }
+
+    // Safeguard 2: Approvals
+    const signedApprovals = approvals.filter(a => a.approver_id === id);
+    if (signedApprovals.length > 0) {
+      return {
+        success: false,
+        error: `Cannot delete user "${existing.full_name}" (${id}): User has signed ${signedApprovals.length} approval record(s). Deactivate this user to preserve compliance history.`,
+      };
+    }
+
+    // Safeguard 3: Bank Signatories
+    const userSigs = signatories.filter(s => s.user_id === id);
+    if (userSigs.length > 0) {
+      return {
+        success: false,
+        error: `Cannot delete user "${existing.full_name}" (${id}): User is an active bank signatory on ${userSigs.length} account(s). Remove their signatory authorization first.`,
+      };
+    }
+
+    // Clean user_companies
+    const updatedUC = userCompanies.filter(uc => uc.user_id !== id);
+    if (updatedUC.length !== userCompanies.length) {
+      setUserCompanies(updatedUC);
+      save('userCompanies', updatedUC);
+      if (supabase) {
+        supabase.from('user_companies').delete().eq('user_id', id).then(() => {});
+      }
+    }
+
     const updated = users.filter(u => u.id !== id);
     setUsers(updated);
     save('users', updated);
     if (supabase) {
       supabase.from('users').delete().eq('id', id).then(() => {});
+      supabase.from('user_credentials').delete().eq('email', existing.email.toLowerCase()).then(() => {});
     }
-    return true;
+    return { success: true };
+  };
+
+  const toggleUserActiveStatus = async (id: string): Promise<{ success: boolean; error?: string }> => {
+    if (currentRole !== 'Admin') {
+      return { success: false, error: 'Unauthorized: Only Admins can modify user active status.' };
+    }
+    const target = users.find(u => u.id === id);
+    if (!target) return { success: false, error: `User ${id} not found.` };
+    const nextStatus = target.is_active === false;
+    const updatedUsers = users.map(u => (u.id === id ? { ...u, is_active: nextStatus } : u));
+    setUsers(updatedUsers);
+    save('users', updatedUsers);
+    if (supabase) {
+      supabase.from('users').update({ is_active: nextStatus }).eq('id', id).then(() => {});
+      supabase.from('user_credentials').update({ is_active: nextStatus }).eq('email', target.email.toLowerCase()).then(() => {});
+    }
+    notifyRealtime(`User ${target.full_name} is now ${nextStatus ? 'Active' : 'Deactivated'}.`);
+    return { success: true };
   };
 
   const addAccessLevel = (level: AccessLevel) => {
@@ -1411,16 +1786,57 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const deleteAccount = (id: string): boolean => {
+  const deleteAccount = (id: string): { success: boolean; error?: string } => {
+    if (currentRole !== 'Admin') {
+      return { success: false, error: 'Unauthorized: Only Admins can delete bank accounts.' };
+    }
     const existing = accounts.find(a => a.id === id);
-    if (!existing) return false;
+    if (!existing) return { success: false, error: `Account ${id} does not exist.` };
+
+    // Safeguard 1: User Transactions
+    const linkedUserTxns = userTransactions.filter(t => t.account_id === id);
+    if (linkedUserTxns.length > 0) {
+      return {
+        success: false,
+        error: `Cannot delete bank account "${existing.bank_name}" (${id}): It has ${linkedUserTxns.length} active transaction(s) recorded against it.`,
+      };
+    }
+
+    // Safeguard 2: Bank Statement Transactions
+    const linkedBankTxns = bankTransactions.filter(b => b.account_id === id);
+    if (linkedBankTxns.length > 0) {
+      return {
+        success: false,
+        error: `Cannot delete bank account "${existing.bank_name}" (${id}): It has ${linkedBankTxns.length} bank statement transaction(s) imported.`,
+      };
+    }
+
+    // Safeguard 3: Statement Uploads
+    const linkedUploads = statementUploads.filter(s => s.account_id === id);
+    if (linkedUploads.length > 0) {
+      return {
+        success: false,
+        error: `Cannot delete bank account "${existing.bank_name}" (${id}): It has ${linkedUploads.length} statement upload(s) registered.`,
+      };
+    }
+
+    // Remove signatories for this account
+    const updatedSigs = signatories.filter(s => s.account_id !== id);
+    if (updatedSigs.length !== signatories.length) {
+      setSignatories(updatedSigs);
+      save('signatories', updatedSigs);
+      if (supabase) {
+        supabase.from('account_signatories').delete().eq('account_id', id).then(() => {});
+      }
+    }
+
     const updated = accounts.filter(a => a.id !== id);
     setAccounts(updated);
     save('accounts', updated);
     if (supabase) {
       supabase.from('accounts').delete().eq('id', id).then(() => {});
     }
-    return true;
+    return { success: true };
   };
 
   // Operational Action 8: Party Management, Tag Bubbles & Aliases
@@ -1509,16 +1925,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const deleteParty = (id: string): boolean => {
+  const deleteParty = (id: string): { success: boolean; error?: string } => {
     const existing = parties.find(p => p.id === id);
-    if (!existing) return false;
+    if (!existing) return { success: false, error: `Party ${id} does not exist.` };
+
+    // Safeguard 1: Check if any user transaction is linked to this party
+    const linkedTxns = userTransactions.filter(t => t.party_id === id);
+    if (linkedTxns.length > 0) {
+      return {
+        success: false,
+        error: `Cannot delete party "${existing.system_name || existing.party_name}" (${id}): There are ${linkedTxns.length} transaction(s) linked to this party.`,
+      };
+    }
+
+    // Clean templates
+    const updatedTemplates = partyTemplates.filter(t => t.party_id !== id);
+    if (updatedTemplates.length !== partyTemplates.length) {
+      setPartyTemplates(updatedTemplates);
+      save('partyTemplates', updatedTemplates);
+      if (supabase) {
+        supabase.from('party_description_templates').delete().eq('party_id', id).then(() => {});
+      }
+    }
+
     const updated = parties.filter(p => p.id !== id);
     setParties(updated);
     save('parties', updated);
     if (supabase) {
       supabase.from('parties').delete().eq('id', id).then(() => {});
     }
-    return true;
+    return { success: true };
   };
 
   const addPartyAliasTag = (partyId: string, aliasName: string) => {
@@ -1943,6 +2379,90 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: false, error: 'Database connection not initialized.' };
   };
 
+  const resetTestData = async (): Promise<{ success: boolean; error?: string }> => {
+    if (currentRole !== 'Admin') {
+      return { success: false, error: 'Unauthorized: Only Admins can reset test data.' };
+    }
+
+    try {
+      // 1. Wipe all transactional, audit, and staging data
+      setUserTransactions([]);
+      save('userTransactions', []);
+
+      setBankTransactions([]);
+      save('bankTransactions', []);
+
+      setTxnBankLinks([]);
+      save('txnBankLinks', []);
+
+      setApprovals([]);
+      save('approvals', []);
+
+      setComments([]);
+      save('comments', []);
+
+      setPendingTransactions([]);
+      save('pendingTransactions', []);
+
+      setStatementUploads([]);
+      save('statementUploads', []);
+
+      setDocuments([]);
+      save('documents', []);
+
+      setRecordVersions([]);
+      save('recordVersions', []);
+
+      setPasswordResetRequests([]);
+      save('passwordResetRequests', []);
+
+      // 2. Keep only the 6 official users
+      const coreUserIds = ['USR1', 'USR2', 'USR3', 'USR4', 'USR5', 'USR6'];
+      const cleanedUsers = users.filter(u => coreUserIds.includes(u.id)).map(u => ({ ...u, is_active: true }));
+      setUsers(cleanedUsers);
+      save('users', cleanedUsers);
+
+      // 3. Keep only COM1 and COM2
+      const coreCompanyIds = ['COM1', 'COM2'];
+      const cleanedCompanies = companies.filter(c => coreCompanyIds.includes(c.id));
+      setCompanies(cleanedCompanies);
+      save('companies', cleanedCompanies);
+
+      // 4. Keep core bank accounts
+      const coreAccountIds = ['BNK1', 'BNK2', 'BNK3', 'BNK4'];
+      const cleanedAccounts = accounts.filter(a => coreAccountIds.includes(a.id));
+      setAccounts(cleanedAccounts);
+      save('accounts', cleanedAccounts);
+
+      // 5. Supabase call
+      if (supabase) {
+        try {
+          const { error: rpcErr } = await supabase.rpc('reset_test_data');
+          if (rpcErr) {
+            console.warn('RPC reset_test_data notice (falling back to direct deletes):', rpcErr.message);
+            await supabase.from('txn_bank_links').delete().neq('id', 'NONE');
+            await supabase.from('approvals').delete().neq('id', 'NONE');
+            await supabase.from('comments').delete().neq('id', 'NONE');
+            await supabase.from('record_versions').delete().neq('id', 'NONE');
+            await supabase.from('pending_transactions').delete().neq('id', 'NONE');
+            await supabase.from('documents').delete().neq('id', 'NONE');
+            await supabase.from('statement_uploads').delete().neq('id', 'NONE');
+            await supabase.from('transactions_user').delete().neq('id', 'NONE');
+            await supabase.from('transactions_bank').delete().neq('id', 'NONE');
+            await supabase.from('password_reset_requests').delete().neq('id', 'NONE');
+          }
+        } catch (supaErr) {
+          console.warn('Supabase reset warning:', supaErr);
+        }
+      }
+
+      notifyRealtime('Test data cleaned successfully. System is fresh and ready for live production entries.');
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Failed to clean test data.' };
+    }
+  };
+
   const logout = () => {
     setIsAuthenticated(false);
     localStorage.removeItem('starruby_auth_user_id');
@@ -1991,6 +2511,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addUser,
         updateUser,
         deleteUser,
+        toggleUserActiveStatus,
         addAccessLevel,
         addAccount,
         updateAccount,
@@ -2031,6 +2552,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         lastRealtimeNotice,
         liveForexRates,
         refreshForexRates,
+        passwordResetRequests,
+        setUserPassword,
+        requestPasswordReset,
+        approvePasswordReset,
+        rejectPasswordReset,
+        completePasswordReset,
+        resetTestData,
       }}
     >
       {children}
