@@ -95,8 +95,6 @@ const MainLayout: React.FC = () => {
       <Header
         onToggleMobileNav={() => setIsMobileNavOpen(prev => !prev)}
         isMobileNavOpen={isMobileNavOpen}
-        onToggleDesktopNav={toggleDesktopNav}
-        isDesktopNavCollapsed={isDesktopNavCollapsed}
       />
 
       <div className="flex-1 flex overflow-hidden min-h-0 relative">

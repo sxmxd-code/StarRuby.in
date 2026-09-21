@@ -5,15 +5,11 @@ import { Building2, Crown, Calculator, Briefcase, BadgeCheck, Menu, X } from 'lu
 interface HeaderProps {
   onToggleMobileNav?: () => void;
   isMobileNavOpen?: boolean;
-  onToggleDesktopNav?: () => void;
-  isDesktopNavCollapsed?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   onToggleMobileNav,
   isMobileNavOpen = false,
-  onToggleDesktopNav,
-  isDesktopNavCollapsed = false,
 }) => {
   const {
     currentUser,
@@ -68,23 +64,13 @@ export const Header: React.FC<HeaderProps> = ({
 
       <div className="w-full px-3 sm:px-6 flex items-center justify-between h-16">
         
-        {/* Left: Hamburger / Sidebar Toggle & Brand Logo */}
+        {/* Left: Mobile-only Hamburger & Brand Logo */}
         <div className="flex items-center space-x-2 sm:space-x-3.5 shrink-0">
           <button
             type="button"
-            onClick={() => {
-              if (window.innerWidth >= 1024) {
-                if (onToggleDesktopNav) onToggleDesktopNav();
-              } else {
-                if (onToggleMobileNav) onToggleMobileNav();
-              }
-            }}
-            className="p-2 -ml-1.5 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition cursor-pointer flex items-center justify-center group"
-            title={
-              (window.innerWidth < 1024 && isMobileNavOpen) || (window.innerWidth >= 1024 && !isDesktopNavCollapsed)
-                ? 'Collapse Sidebar'
-                : 'Open Sidebar'
-            }
+            onClick={onToggleMobileNav}
+            className="lg:hidden p-2 -ml-1.5 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition cursor-pointer flex items-center justify-center group"
+            title="Toggle Navigation Menu"
             aria-label="Toggle Navigation Menu"
           >
             {isMobileNavOpen ? (
