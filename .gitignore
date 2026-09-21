@@ -32,4 +32,6 @@ docs/*
 .env*.local
 A.txt
 supabase/
+scratch_*
+scratch_screenshots/
 

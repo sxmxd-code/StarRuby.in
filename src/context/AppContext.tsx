@@ -98,7 +98,22 @@ interface AppContextType {
   recordVersions: RecordVersion[];
 
   // Operational Actions
+  addCompany: (comp: Omit<Company, 'id' | 'created_at'>, customId?: string) => Company;
+  updateCompany: (id: string, updates: Partial<Company>) => void;
+  deleteCompany: (id: string) => boolean;
+
+  addUser: (user: Omit<User, 'id' | 'created_at'>, customId?: string) => User;
+  updateUser: (id: string, updates: Partial<User>) => void;
+  deleteUser: (id: string) => boolean;
+  addAccessLevel: (level: AccessLevel) => void;
+
+  addAccount: (acc: Omit<Account, 'id' | 'created_at'>, customId?: string) => Account;
+  updateAccount: (id: string, updates: Partial<Account>) => void;
+  deleteAccount: (id: string) => boolean;
+
   addUserTransaction: (txn: Omit<UserTransaction, 'id' | 'date_of_entry' | 'status' | 'created_by' | 'created_at' | 'updated_at'>) => UserTransaction;
+  addUserTransactionsBatch: (txns: Omit<UserTransaction, 'id' | 'date_of_entry' | 'status' | 'created_by' | 'created_at' | 'updated_at'>[]) => UserTransaction[];
+  updateUserTransaction: (id: string, updates: Partial<UserTransaction>) => void;
   deleteUserTransaction: (id: string, reason: string) => boolean;
   updateUserTransactionCell: (id: string, column: keyof UserTransaction, value: any) => void;
   
@@ -111,8 +126,11 @@ interface AppContextType {
   closeInMatchTab: (userTxnId: string, linkedBankIds: string[], verifiedWithBank: 'Yes' | 'No', comment?: string) => void;
   submitApproval: (userTxnId: string, layer: 1 | 2 | 3, decision: 'approved' | 'rejected', comment?: string) => { success: boolean; message: string };
   
-  addParty: (party: Omit<Party, 'id' | 'created_at'>) => Party;
+  addParty: (party: Omit<Party, 'id' | 'created_at'>, customId?: string) => Party;
   updateParty: (id: string, updates: Partial<Party>) => void;
+  deleteParty: (id: string) => boolean;
+  addPartyAliasTag: (partyId: string, aliasName: string) => void;
+  removePartyAliasTag: (partyId: string, aliasName: string) => void;
   mapPartyAlias: (aliasId: string, partyId: string) => void;
   createPartyFromAlias: (aliasId: string, cleanSystemName: string, groupName?: string) => Party;
   ignorePartyAlias: (aliasId: string) => void;
@@ -172,7 +190,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [companies, setCompanies] = useState<Company[]>(() => loadInitial('companies', initialCompanies));
   const [users, setUsers] = useState<User[]>(() => loadInitial('users', initialUsers));
-  const [accessLevels] = useState<AccessLevel[]>(initialAccessLevels);
+  const [accessLevels, setAccessLevels] = useState<AccessLevel[]>(() => loadInitial('accessLevels', initialAccessLevels));
   const [userCompanies, setUserCompanies] = useState<UserCompany[]>(() => loadInitial('userCompanies', initialUserCompanies));
   const [accounts, setAccounts] = useState<Account[]>(() => loadInitial('accounts', initialAccounts));
   const [signatories, setSignatories] = useState<AccountSignatory[]>(() => loadInitial('signatories', initialSignatories));
@@ -673,7 +691,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const aliasExists = partyAliases.some(a => a.alias_normalized === normalizedTyped);
         if (!aliasExists && normalizedTyped) {
           // Check exact party system name match
-          const exactParty = parties.find(p => normalizeAlias(p.system_name || p.party_name) === normalizedTyped);
+          const exactParty = parties.find(p => normalizeAlias(p.system_name || p.party_name || '') === normalizedTyped);
           const maxAliasNum = partyAliases.reduce((acc, a) => {
             const num = parseInt(a.id.replace(/\D/g, ''), 10);
             return isNaN(num) ? acc : Math.max(acc, num);
@@ -741,6 +759,61 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return newTxn;
   };
 
+  // Operational Action 1b: Batch Insert User Transactions (Guarantees unique sequential IDs without closure clash)
+  const addUserTransactionsBatch = (
+    txnsData: Omit<UserTransaction, 'id' | 'date_of_entry' | 'status' | 'created_by' | 'created_at' | 'updated_at'>[]
+  ): UserTransaction[] => {
+    if (txnsData.length === 0) return [];
+
+    let currentMax = userTransactions.reduce((acc, t) => {
+      const num = parseInt(t.id.replace(/\D/g, ''), 10);
+      return isNaN(num) ? acc : Math.max(acc, num);
+    }, 100);
+
+    const now = new Date().toISOString();
+    const today = now.slice(0, 10);
+    const newTxns: UserTransaction[] = [];
+
+    for (const data of txnsData) {
+      currentMax++;
+      const newId = `UTRN${currentMax}`;
+
+      // Resolve party if raw name provided
+      let resolvedPartyId = data.party_id;
+      if (!resolvedPartyId && data.party_name_raw) {
+        const norm = normalizeAlias(data.party_name_raw);
+        const match = parties.find(
+          p => (p.system_name && normalizeAlias(p.system_name) === norm) ||
+               normalizeAlias(p.party_name) === norm
+        );
+        if (match) resolvedPartyId = match.id;
+      }
+
+      newTxns.push({
+        ...data,
+        id: newId,
+        party_id: resolvedPartyId,
+        date_of_entry: today,
+        status: 'open',
+        created_by: currentUser.id,
+        created_at: now,
+        updated_at: now,
+      });
+    }
+
+    const updatedTxns = [...newTxns, ...userTransactions];
+    setUserTransactions(updatedTxns);
+    save('userTransactions', updatedTxns);
+
+    if (supabase) {
+      supabase.from('transactions_user').insert(newTxns).then(({ error }) => {
+        if (error) console.warn('Supabase batch insert error:', error.message);
+      });
+    }
+
+    return newTxns;
+  };
+
   // Operational Action 2: Delete User Transaction (Logged with who & when)
   const deleteUserTransaction = (id: string, reason: string): boolean => {
     const existing = userTransactions.find(t => t.id === id);
@@ -798,6 +871,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (supabase) {
       supabase.from('transactions_user').update({ [column]: value, updated_at: updated.updated_at }).eq('id', id).then(() => {});
+    }
+  };
+
+  // Operational Action 3b: Update User Transaction (Full Record CRUD)
+  const updateUserTransaction = (id: string, updates: Partial<UserTransaction>) => {
+    const existing = userTransactions.find(t => t.id === id);
+    if (!existing) return;
+
+    const updated = { ...existing, ...updates, updated_at: new Date().toISOString() };
+    const deltas = createCellAuditDelta('transactions_user', id, existing, updated, currentUser.id, recordVersions);
+
+    if (deltas.length > 0) {
+      const updatedVersions = [...deltas, ...recordVersions];
+      setRecordVersions(updatedVersions);
+      save('recordVersions', updatedVersions);
+      if (supabase) {
+        supabase.from('record_versions').insert(deltas).then(() => {});
+      }
+    }
+
+    const updatedTxns = userTransactions.map(t => (t.id === id ? updated : t));
+    setUserTransactions(updatedTxns);
+    save('userTransactions', updatedTxns);
+
+    if (supabase) {
+      supabase.from('transactions_user').update(updates).eq('id', id).then(() => {});
     }
   };
 
@@ -899,6 +998,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Operational Action 6: Match Tab Close (Layer 1 Approval)
   const closeInMatchTab = (userTxnId: string, linkedBankIds: string[], verifiedWithBank: 'Yes' | 'No', comment?: string) => {
+    if (currentRole === 'Staff') return;
+
     // 1. Link all selected bank lines
     for (const bankId of linkedBankIds) {
       linkTxnBank(userTxnId, bankId, 'manual');
@@ -942,7 +1043,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       save('userTransactions', updatedTxns);
 
       if (supabase) {
-        supabase.from('approvals').insert([layer1Approval]).then(() => {});
+        supabase.from('approvals').upsert([layer1Approval], { onConflict: 'user_txn_id, layer' }).then(() => {});
         supabase.from('transactions_user').update({
           status: 'in_approval',
           verified_with_bank: verifiedWithBank,
@@ -975,7 +1076,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         comment: comment || 'Rejected',
         decided_at: new Date().toISOString(),
       };
-      const updatedApprovals = [...approvals, approvalRecord];
+      const updatedApprovals = [...approvals.filter(a => !(a.user_txn_id === userTxnId && a.layer === layer)), approvalRecord];
       setApprovals(updatedApprovals);
       save('approvals', updatedApprovals);
 
@@ -993,7 +1094,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       save('userTransactions', updatedTxns);
 
       if (supabase) {
-        supabase.from('approvals').insert([approvalRecord]).then(() => {});
+        supabase.from('approvals').upsert([approvalRecord], { onConflict: 'user_txn_id, layer' }).then(() => {});
         supabase.from('transactions_user').update({
           status: 'open',
           updated_at: updatedTxn.updated_at,
@@ -1001,6 +1102,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       return { success: true, message: `Transaction rejected at Layer ${layer} and reverted to open status for correction.` };
+    }
+
+    // LAYER 1: Match Tab Close / Verification
+    if (layer === 1) {
+      if (currentRole === 'Staff') {
+        return { success: false, message: 'Staff users cannot approve Layer 1.' };
+      }
+
+      const layer1Approval: Approval = {
+        id: maxApprId + 1,
+        user_txn_id: userTxnId,
+        layer: 1,
+        approver_id: currentUser.id,
+        decision: 'approved',
+        comment: comment || 'Layer 1 approved',
+        decided_at: new Date().toISOString(),
+      };
+      const updatedApprovals = [...approvals.filter(a => !(a.user_txn_id === userTxnId && a.layer === 1)), layer1Approval];
+      setApprovals(updatedApprovals);
+      save('approvals', updatedApprovals);
+
+      const updatedTxn = { ...txn, status: 'in_approval' as const, updated_at: new Date().toISOString() };
+      const deltas = createCellAuditDelta('transactions_user', userTxnId, txn, updatedTxn, currentUser.id, recordVersions);
+      if (deltas.length > 0) {
+        setRecordVersions([...deltas, ...recordVersions]);
+        save('recordVersions', [...deltas, ...recordVersions]);
+        if (supabase) {
+          supabase.from('record_versions').insert(deltas).then(() => {});
+        }
+      }
+      const updatedTxns = userTransactions.map(t => (t.id === userTxnId ? updatedTxn : t));
+      setUserTransactions(updatedTxns);
+      save('userTransactions', updatedTxns);
+
+      if (supabase) {
+        supabase.from('approvals').upsert([layer1Approval], { onConflict: 'user_txn_id, layer' }).then(() => {});
+        supabase.from('transactions_user').update({
+          status: 'in_approval',
+          updated_at: updatedTxn.updated_at,
+        }).eq('id', userTxnId).then(() => {});
+      }
+
+      return { success: true, message: 'Layer 1 approved! Transaction is in approval pipeline.' };
     }
 
     // LAYER 2: Admin Approval (Harshil OR Vismay)
@@ -1037,7 +1181,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       save('userTransactions', updatedTxns);
 
       if (supabase) {
-        supabase.from('approvals').insert([layer2Approval]).then(() => {});
+        supabase.from('approvals').upsert([layer2Approval], { onConflict: 'user_txn_id, layer' }).then(() => {});
         supabase.from('transactions_user').update({
           status: 'approved',
           updated_at: updatedTxn.updated_at,
@@ -1095,7 +1239,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       save('userTransactions', updatedTxns);
 
       if (supabase) {
-        supabase.from('approvals').insert([layer3Approval]).then(() => {});
+        supabase.from('approvals').upsert([layer3Approval], { onConflict: 'user_txn_id, layer' }).then(() => {});
         supabase.from('transactions_user').update({
           status: 'approved',
           updated_at: updatedTxn.updated_at,
@@ -1108,16 +1252,203 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: false, message: 'Invalid approval layer specified.' };
   };
 
-  // Operational Action 8: Party Management & Aliases
-  const addParty = (data: Omit<Party, 'id' | 'created_at'>): Party => {
-    const maxNum = parties.reduce((acc, p) => {
-      const num = parseInt(p.id.replace(/\D/g, ''), 10);
-      return isNaN(num) ? acc : Math.max(acc, num);
-    }, 100);
-    const newId = `PTY${maxNum + 1}`;
+  // Operational Action 7b: Company CRUD
+  const addCompany = (data: Omit<Company, 'id' | 'created_at'>, customId?: string): Company => {
+    let newId = customId;
+    if (!newId) {
+      const maxNum = companies.reduce((acc, c) => {
+        const num = parseInt(c.id.replace(/\D/g, ''), 10);
+        return isNaN(num) ? acc : Math.max(acc, num);
+      }, 0);
+      newId = `COM${maxNum + 1}`;
+    }
+    const newCompany: Company = {
+      ...data,
+      id: newId,
+      created_at: new Date().toISOString(),
+    };
+    const updated = [...companies, newCompany];
+    setCompanies(updated);
+    save('companies', updated);
+    if (supabase) {
+      supabase.from('companies').insert([newCompany]).then(() => {});
+    }
+    return newCompany;
+  };
+
+  const updateCompany = (id: string, updates: Partial<Company>) => {
+    const existing = companies.find(c => c.id === id);
+    if (!existing) return;
+    const updated = { ...existing, ...updates };
+    const deltas = createCellAuditDelta('companies', id, existing, updated, currentUser.id, recordVersions);
+    if (deltas.length > 0) {
+      setRecordVersions([...deltas, ...recordVersions]);
+      save('recordVersions', [...deltas, ...recordVersions]);
+      if (supabase) supabase.from('record_versions').insert(deltas).then(() => {});
+    }
+    const updatedCompanies = companies.map(c => (c.id === id ? updated : c));
+    setCompanies(updatedCompanies);
+    save('companies', updatedCompanies);
+    if (supabase) {
+      supabase.from('companies').update(updates).eq('id', id).then(() => {});
+    }
+  };
+
+  const deleteCompany = (id: string): boolean => {
+    const existing = companies.find(c => c.id === id);
+    if (!existing) return false;
+    const updated = companies.filter(c => c.id !== id);
+    setCompanies(updated);
+    save('companies', updated);
+    if (supabase) {
+      supabase.from('companies').delete().eq('id', id).then(() => {});
+    }
+    return true;
+  };
+
+  // Operational Action 7c: User & Roles CRUD
+  const addUser = (data: Omit<User, 'id' | 'created_at'>, customId?: string): User => {
+    let newId = customId;
+    if (!newId) {
+      const maxNum = users.reduce((acc, u) => {
+        const num = parseInt(u.id.replace(/\D/g, ''), 10);
+        return isNaN(num) ? acc : Math.max(acc, num);
+      }, 0);
+      newId = `USR${maxNum + 1}`;
+    }
+    const newUser: User = {
+      ...data,
+      id: newId,
+      created_at: new Date().toISOString(),
+    };
+    const updated = [...users, newUser];
+    setUsers(updated);
+    save('users', updated);
+    if (supabase) {
+      supabase.from('users').insert([newUser]).then(() => {});
+    }
+    return newUser;
+  };
+
+  const updateUser = (id: string, updates: Partial<User>) => {
+    const existing = users.find(u => u.id === id);
+    if (!existing) return;
+    const updated = { ...existing, ...updates };
+    const deltas = createCellAuditDelta('users', id, existing, updated, currentUser.id, recordVersions);
+    if (deltas.length > 0) {
+      setRecordVersions([...deltas, ...recordVersions]);
+      save('recordVersions', [...deltas, ...recordVersions]);
+      if (supabase) supabase.from('record_versions').insert(deltas).then(() => {});
+    }
+    const updatedUsers = users.map(u => (u.id === id ? updated : u));
+    setUsers(updatedUsers);
+    save('users', updatedUsers);
+    if (supabase) {
+      supabase.from('users').update(updates).eq('id', id).then(() => {});
+    }
+  };
+
+  const deleteUser = (id: string): boolean => {
+    const existing = users.find(u => u.id === id);
+    if (!existing) return false;
+    const updated = users.filter(u => u.id !== id);
+    setUsers(updated);
+    save('users', updated);
+    if (supabase) {
+      supabase.from('users').delete().eq('id', id).then(() => {});
+    }
+    return true;
+  };
+
+  const addAccessLevel = (level: AccessLevel) => {
+    const updated = [...accessLevels, level];
+    setAccessLevels(updated);
+    save('accessLevels', updated);
+    if (supabase) {
+      supabase.from('access_levels').insert([level]).then(() => {});
+    }
+  };
+
+  // Operational Action 7d: Bank Account CRUD
+  const addAccount = (data: Omit<Account, 'id' | 'created_at'>, customId?: string): Account => {
+    let newId = customId;
+    if (!newId) {
+      const maxNum = accounts.reduce((acc, a) => {
+        const num = parseInt(a.id.replace(/\D/g, ''), 10);
+        return isNaN(num) ? acc : Math.max(acc, num);
+      }, 0);
+      newId = `BNK${maxNum + 1}`;
+    }
+    const newAcc: Account = {
+      ...data,
+      id: newId,
+      created_at: new Date().toISOString(),
+    };
+    const updated = [...accounts, newAcc];
+    setAccounts(updated);
+    save('accounts', updated);
+    if (supabase) {
+      supabase.from('accounts').insert([newAcc]).then(() => {});
+    }
+    return newAcc;
+  };
+
+  const updateAccount = (id: string, updates: Partial<Account>) => {
+    const existing = accounts.find(a => a.id === id);
+    if (!existing) return;
+    const updated = { ...existing, ...updates };
+    const deltas = createCellAuditDelta('accounts', id, existing, updated, currentUser.id, recordVersions);
+    if (deltas.length > 0) {
+      setRecordVersions([...deltas, ...recordVersions]);
+      save('recordVersions', [...deltas, ...recordVersions]);
+      if (supabase) supabase.from('record_versions').insert(deltas).then(() => {});
+    }
+    const updatedAccounts = accounts.map(a => (a.id === id ? updated : a));
+    setAccounts(updatedAccounts);
+    save('accounts', updatedAccounts);
+    if (supabase) {
+      supabase.from('accounts').update(updates).eq('id', id).then(() => {});
+    }
+  };
+
+  const deleteAccount = (id: string): boolean => {
+    const existing = accounts.find(a => a.id === id);
+    if (!existing) return false;
+    const updated = accounts.filter(a => a.id !== id);
+    setAccounts(updated);
+    save('accounts', updated);
+    if (supabase) {
+      supabase.from('accounts').delete().eq('id', id).then(() => {});
+    }
+    return true;
+  };
+
+  // Operational Action 8: Party Management, Tag Bubbles & Aliases
+  const addParty = (data: Omit<Party, 'id' | 'created_at'>, customId?: string): Party => {
+    let newId = customId;
+    if (!newId) {
+      const maxNum = parties.reduce((acc, p) => {
+        const num = parseInt(p.id.replace(/\D/g, ''), 10);
+        return isNaN(num) ? acc : Math.max(acc, num);
+      }, 100);
+      newId = `PTY${maxNum + 1}`;
+    }
+
+    const rawNames = Array.isArray(data.party_name_raw)
+      ? data.party_name_raw
+      : data.party_name_raw
+      ? [data.party_name_raw]
+      : data.party_name
+      ? [data.party_name]
+      : data.system_name
+      ? [data.system_name]
+      : [];
+
     const newParty: Party = {
       ...data,
       id: newId,
+      party_name_raw: rawNames,
+      party_name: data.party_name || (rawNames[0] || data.system_name || newId),
       created_at: new Date().toISOString(),
     };
     const updated = [...parties, newParty];
@@ -1126,6 +1457,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (supabase) {
       supabase.from('parties').insert([newParty]).then(() => {});
     }
+
+    // Auto-create alias mapping for initial names
+    rawNames.forEach(name => {
+      if (name && name.trim()) {
+        const norm = normalizeAlias(name);
+        if (!partyAliases.some(a => a.alias_normalized === norm)) {
+          const maxAliasNum = partyAliases.reduce((acc, a) => {
+            const num = parseInt(a.id.replace(/\D/g, ''), 10);
+            return isNaN(num) ? acc : Math.max(acc, num);
+          }, 0);
+          const newAlias: PartyAlias = {
+            id: `PALIAS${maxAliasNum + 1}`,
+            alias_name: name.trim(),
+            alias_normalized: norm,
+            party_id: newId,
+            status: 'mapped',
+            created_by: currentUser.id,
+            created_at: new Date().toISOString(),
+          };
+          setPartyAliases(prev => {
+            const next = [...prev, newAlias];
+            save('partyAliases', next);
+            return next;
+          });
+          if (supabase) supabase.from('party_aliases').insert([newAlias]).then(() => {});
+        }
+      }
+    });
+
     return newParty;
   };
 
@@ -1147,6 +1507,89 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (supabase) {
       supabase.from('parties').update(updates).eq('id', id).then(() => {});
     }
+  };
+
+  const deleteParty = (id: string): boolean => {
+    const existing = parties.find(p => p.id === id);
+    if (!existing) return false;
+    const updated = parties.filter(p => p.id !== id);
+    setParties(updated);
+    save('parties', updated);
+    if (supabase) {
+      supabase.from('parties').delete().eq('id', id).then(() => {});
+    }
+    return true;
+  };
+
+  const addPartyAliasTag = (partyId: string, aliasName: string) => {
+    const party = parties.find(p => p.id === partyId);
+    if (!party || !aliasName.trim()) return;
+
+    const currentAliases = Array.isArray(party.party_name_raw)
+      ? party.party_name_raw
+      : party.party_name_raw
+      ? [party.party_name_raw]
+      : party.party_name
+      ? [party.party_name]
+      : [];
+
+    if (currentAliases.some(a => a.toLowerCase() === aliasName.trim().toLowerCase())) return;
+
+    const nextAliases = [...currentAliases, aliasName.trim()];
+    updateParty(partyId, { party_name_raw: nextAliases });
+
+    const norm = normalizeAlias(aliasName);
+    const existingAlias = partyAliases.find(a => a.alias_normalized === norm);
+    if (existingAlias) {
+      mapPartyAlias(existingAlias.id, partyId);
+    } else {
+      const maxNum = partyAliases.reduce((acc, a) => {
+        const num = parseInt(a.id.replace(/\D/g, ''), 10);
+        return isNaN(num) ? acc : Math.max(acc, num);
+      }, 0);
+      const newAlias: PartyAlias = {
+        id: `PALIAS${maxNum + 1}`,
+        alias_name: aliasName.trim(),
+        alias_normalized: norm,
+        party_id: partyId,
+        status: 'mapped',
+        created_by: currentUser.id,
+        created_at: new Date().toISOString(),
+      };
+      const updatedAliases = [...partyAliases, newAlias];
+      setPartyAliases(updatedAliases);
+      save('partyAliases', updatedAliases);
+      if (supabase) supabase.from('party_aliases').insert([newAlias]).then(() => {});
+
+      // Retroactive update transactions
+      const matchingTxnIds: string[] = [];
+      const updatedTxns = userTransactions.map(t => {
+        if (normalizeAlias(t.party_name_raw) === norm && (!t.party_id || t.party_id !== partyId)) {
+          matchingTxnIds.push(t.id);
+          return { ...t, party_id: partyId, updated_at: new Date().toISOString() };
+        }
+        return t;
+      });
+      setUserTransactions(updatedTxns);
+      save('userTransactions', updatedTxns);
+      if (supabase && matchingTxnIds.length > 0) {
+        supabase.from('transactions_user').update({ party_id: partyId, updated_at: new Date().toISOString() }).in('id', matchingTxnIds).then(() => {});
+      }
+    }
+  };
+
+  const removePartyAliasTag = (partyId: string, aliasName: string) => {
+    const party = parties.find(p => p.id === partyId);
+    if (!party) return;
+    const currentAliases = Array.isArray(party.party_name_raw)
+      ? party.party_name_raw
+      : party.party_name_raw
+      ? [party.party_name_raw]
+      : party.party_name
+      ? [party.party_name]
+      : [];
+    const nextAliases = currentAliases.filter(a => a.toLowerCase() !== aliasName.toLowerCase());
+    updateParty(partyId, { party_name_raw: nextAliases });
   };
 
   const mapPartyAlias = (aliasId: string, partyId: string) => {
@@ -1542,7 +1985,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         statementUploads,
         documents,
         recordVersions,
+        addCompany,
+        updateCompany,
+        deleteCompany,
+        addUser,
+        updateUser,
+        deleteUser,
+        addAccessLevel,
+        addAccount,
+        updateAccount,
+        deleteAccount,
         addUserTransaction,
+        addUserTransactionsBatch,
+        updateUserTransaction,
         deleteUserTransaction,
         updateUserTransactionCell,
         addBankTransaction,
@@ -1553,6 +2008,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         submitApproval,
         addParty,
         updateParty,
+        deleteParty,
+        addPartyAliasTag,
+        removePartyAliasTag,
         mapPartyAlias,
         createPartyFromAlias,
         ignorePartyAlias,

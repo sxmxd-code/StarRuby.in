@@ -54,20 +54,28 @@ export const DashboardModule: React.FC<{ onNavigate: (tab: NavTab) => void }> = 
   const currentUsdRate = liveForexRates?.ratesToInr?.USD || 95.50;
 
   // Accurate Consolidated Group Turnover in INR using dynamic live market rates
-  const consolidatedInrVolume = scopedUserTransactions.reduce((acc, t) => {
-    if ((t.currency || 'INR') === 'INR') {
+  const consolidatedInrVolume = scopedUserTransactions
+    .filter(t => t.status !== 'rejected')
+    .reduce((acc, t) => {
+      if ((t.currency || 'INR') === 'INR') {
+        return acc + (t.amount || 0);
+      }
+      if (t.amount_in_inr) {
+        return acc + t.amount_in_inr;
+      }
+      if (t.exchange_rate) {
+        return acc + (t.amount * t.exchange_rate);
+      }
+      if (t.currency === 'AED') return acc + (t.amount * currentAedRate);
+      if (t.currency === 'USD') return acc + (t.amount * currentUsdRate);
+      if (t.currency === 'EUR' || t.currency === 'GBP') {
+        const rate = liveForexRates?.ratesToInr?.[t.currency];
+        if (rate) return acc + (t.amount * rate);
+      }
+      const genericRate = liveForexRates?.ratesToInr?.[t.currency];
+      if (genericRate) return acc + (t.amount * genericRate);
       return acc + (t.amount || 0);
-    }
-    if (t.amount_in_inr) {
-      return acc + t.amount_in_inr;
-    }
-    if (t.exchange_rate) {
-      return acc + (t.amount * t.exchange_rate);
-    }
-    if (t.currency === 'AED') return acc + (t.amount * currentAedRate);
-    if (t.currency === 'USD') return acc + (t.amount * currentUsdRate);
-    return acc + (t.amount || 0);
-  }, 0);
+    }, 0);
 
   const unmappedAliasesCount = partyAliases.filter(a => a.status === 'unmapped').length;
   const inApprovalCount = scopedUserTransactions.filter(t => t.status === 'in_approval').length;
@@ -148,7 +156,7 @@ export const DashboardModule: React.FC<{ onNavigate: (tab: NavTab) => void }> = 
                   Vol: AED {aedVolume.toLocaleString('en-AE', { minimumFractionDigits: 2 })}
                 </span>
                 <span className="text-[10px] text-slate-400">
-                  (~₹{consolidatedInrVolume.toLocaleString('en-IN', { minimumFractionDigits: 0 })} @ 22.85)
+                  (~₹{consolidatedInrVolume.toLocaleString('en-IN', { minimumFractionDigits: 0 })} @ {currentAedRate})
                 </span>
               </div>
             ) : (

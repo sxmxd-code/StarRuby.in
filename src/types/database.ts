@@ -23,6 +23,7 @@ export interface User {
   full_name: string;
   email: string;
   access_level_id: string;
+  access_role_ids?: string[]; // Multiple access roles supported (e.g. ACC1, ACC2)
   is_active: boolean;
   created_at: string;
 }
@@ -61,9 +62,11 @@ export interface AccountSignatory {
 export interface Party {
   id: string; // PTY101, PTY102...
   system_name?: string; // Clean source of truth name
-  party_name: string; // First-seen raw fallback
+  party_name: string; // Clean display name (or first raw alias)
+  party_name_raw?: string | string[]; // In updated Excel & brief: array of raw names/aliases mapped to this party
   bank_name?: string;
   bank_country?: string;
+  country?: string;
   account_number?: string;
   iban_number?: string;
   swift_code?: string;

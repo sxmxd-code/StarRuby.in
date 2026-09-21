@@ -15,6 +15,12 @@ export function createCellAuditDelta<T extends Record<string, any>>(
   changedBy: string,
   existingVersions: RecordVersion[] = []
 ): RecordVersion[] {
+  // Ensure versionCounter is always greater than existing versions to prevent primary key collisions after reload
+  const maxExistingId = Math.max(...existingVersions.map(v => v.id || 0), 1000);
+  if (versionCounter < maxExistingId) {
+    versionCounter = maxExistingId;
+  }
+
   const versions: RecordVersion[] = [];
   const allKeys = Array.from(new Set([...Object.keys(oldRecord), ...Object.keys(newRecord)]));
 

@@ -25,7 +25,7 @@ export const StatementReconciliationModule: React.FC = () => {
 
   // Compute running balance
   const ledgerRows = useMemo(() => {
-    let running = 1700000; // Sample opening balance
+    let running = 0;
     return accountEntries.map(entry => {
       if (entry.balance_after !== undefined && entry.balance_after !== null) {
         running = entry.balance_after;

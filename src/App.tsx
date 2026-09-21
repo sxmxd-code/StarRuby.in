@@ -21,8 +21,45 @@ import { VersionHistoryModule } from './components/modules/VersionHistoryModule'
 import { LoginPage } from './components/auth/LoginPage';
 import { useApp } from './context/AppContext';
 
+const VALID_TABS: NavTab[] = [
+  'dashboard',
+  'masters',
+  'user_entry',
+  'bank_entry',
+  'duplicates',
+  'aliases',
+  'match',
+  'approvals',
+  'discrepancies',
+  'pending_queue',
+  'statement_uploads',
+  'statement_ledger',
+  'documents',
+  'versions',
+];
+
 const MainLayout: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
+  const [activeTab, setActiveTabState] = useState<NavTab>(() => {
+    try {
+      const saved = localStorage.getItem('starruby_active_tab') as NavTab | null;
+      if (saved && VALID_TABS.includes(saved)) {
+        return saved;
+      }
+    } catch {
+      // Ignore localStorage access issues if in restrictive iframe/private browsing
+    }
+    return 'dashboard';
+  });
+
+  const setActiveTab = (tab: NavTab) => {
+    setActiveTabState(tab);
+    try {
+      localStorage.setItem('starruby_active_tab', tab);
+    } catch {
+      // Ignore localStorage write failure
+    }
+  };
+
   const { lastRealtimeNotice } = useApp();
 
   return (

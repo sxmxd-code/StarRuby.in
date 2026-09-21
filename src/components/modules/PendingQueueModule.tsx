@@ -82,7 +82,7 @@ export const PendingQueueModule: React.FC = () => {
           className="flex items-center space-x-1.5 px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-bold shadow-sm"
         >
           <Plus className="w-4 h-4" />
-          <span>+ Add Expected Item</span>
+          <span>Add Expected Item</span>
         </button>
       </div>
 

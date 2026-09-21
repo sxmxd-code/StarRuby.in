@@ -42,9 +42,11 @@ export const MatchModule: React.FC = () => {
   // Compute match candidates for selected transaction
   const candidates: MatchCandidate[] = useMemo(() => {
     if (!selectedTxn) return [];
+    const linkedBankIds = new Set(txnBankLinks.map(l => l.bank_txn_id));
+    const availableBankTxns = scopedBankTransactions.filter(b => !linkedBankIds.has(b.id));
     const partyName = selectedTxn.party_id ? partiesMap.get(selectedTxn.party_id)?.system_name : selectedTxn.party_name_raw;
-    return getMatchCandidatesForUserTxn(selectedTxn, scopedBankTransactions, partyName, 7, 0.6);
-  }, [selectedTxn, scopedBankTransactions, partiesMap]);
+    return getMatchCandidatesForUserTxn(selectedTxn, availableBankTxns, partyName, 7, 0.6);
+  }, [selectedTxn, scopedBankTransactions, partiesMap, txnBankLinks]);
 
   const toggleBankSelection = (bankId: string) => {
     setSelectedBankIds(prev => {
