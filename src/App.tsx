@@ -91,7 +91,7 @@ const MainLayout: React.FC = () => {
   const { lastRealtimeNotice } = useApp();
 
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden bg-slate-50/70 font-sans text-slate-900 relative">
+    <div className="h-screen max-h-screen w-full max-w-full flex flex-col overflow-hidden bg-slate-50/70 font-sans text-slate-900 relative">
       <Header
         onToggleMobileNav={() => setIsMobileNavOpen(prev => !prev)}
         isMobileNavOpen={isMobileNavOpen}
@@ -111,7 +111,7 @@ const MainLayout: React.FC = () => {
 
         <main
           ref={mainScrollRef}
-          className="flex-1 overflow-y-auto p-3 sm:p-5 lg:p-8 w-full min-h-0"
+          className="flex-1 overflow-y-auto p-3 sm:p-4 lg:p-6 w-full min-h-0"
         >
           <div key={activeTab} className="animate-module-enter w-full min-h-full">
             {activeTab === 'dashboard' && <DashboardModule onNavigate={setActiveTab} />}

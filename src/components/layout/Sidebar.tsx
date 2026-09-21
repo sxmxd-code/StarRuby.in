@@ -140,18 +140,45 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   };
 
-  const renderNavContent = () => (
+  const renderNavContent = (collapsed: boolean = false) => (
     <>
-      <div className="p-3 space-y-5 flex-1 overflow-y-auto">
+      <div className={`space-y-4 flex-1 overflow-y-auto ${collapsed ? 'p-2' : 'p-3 space-y-5'}`}>
         {navGroups.map((group, idx) => (
           <div key={idx} className="space-y-1">
-            <h3 className="px-3 text-[10px] font-bold tracking-wider text-slate-400 uppercase">
-              {group.title}
-            </h3>
-            <div className="space-y-0.5 pt-1">
+            {collapsed ? (
+              idx > 0 && <div className="my-2 border-t border-slate-200/80 mx-1" />
+            ) : (
+              <h3 className="px-3 text-[10px] font-bold tracking-wider text-slate-400 uppercase">
+                {group.title}
+              </h3>
+            )}
+            <div className={`space-y-0.5 ${collapsed ? '' : 'pt-1'}`}>
               {group.items.map((item) => {
                 const Icon = item.icon;
                 const isActive = activeTab === item.id;
+                
+                if (collapsed) {
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => handleItemClick(item.id as NavTab)}
+                      title={`${item.label}${item.badge ? ` (${item.badge})` : ''}`}
+                      className={`w-10 h-10 mx-auto flex items-center justify-center rounded-xl transition-all duration-150 cursor-pointer select-none relative ${
+                        isActive
+                          ? 'bg-rose-100 text-rose-900 shadow-2xs font-bold'
+                          : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                      }`}
+                    >
+                      <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-rose-700' : 'text-slate-500'}`} />
+                      {item.badge && item.badge > 0 ? (
+                        <span className="absolute -top-0.5 -right-0.5 min-w-[15px] h-[15px] px-1 text-[8px] font-bold rounded-full bg-rose-600 text-white flex items-center justify-center ring-2 ring-white">
+                          {item.badge}
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                }
+
                 return (
                   <button
                     key={item.id}
@@ -180,17 +207,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ))}
       </div>
 
-      {/* Bottom Pinned Actions: Collapse Toggle (Desktop only) + Sign Out */}
-      <div className="p-3 border-t border-slate-200/90 bg-slate-50/90 shrink-0 space-y-2">
+      {/* Bottom Pinned Actions */}
+      <div className={`border-t border-slate-200/90 bg-slate-50/90 shrink-0 space-y-2 ${collapsed ? 'p-2 flex flex-col items-center' : 'p-3'}`}>
         {onToggleDesktop && (
           <button
             type="button"
             onClick={onToggleDesktop}
-            className="hidden lg:flex w-full items-center justify-center space-x-1.5 py-1.5 px-3 text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 rounded-xl text-[11px] font-medium transition cursor-pointer"
-            title="Collapse Sidebar"
+            className={`flex items-center justify-center text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 rounded-xl transition cursor-pointer ${
+              collapsed ? 'w-10 h-10' : 'w-full space-x-1.5 py-1.5 px-3 text-[11px] font-medium'
+            }`}
+            title={collapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
           >
-            <ChevronLeft className="w-3.5 h-3.5" />
-            <span>Collapse Sidebar</span>
+            {collapsed ? (
+              <ChevronRight className="w-4 h-4" />
+            ) : (
+              <>
+                <ChevronLeft className="w-3.5 h-3.5" />
+                <span>Collapse Sidebar</span>
+              </>
+            )}
           </button>
         )}
 
@@ -200,11 +235,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
               logout();
             }
           }}
-          className="w-full flex items-center justify-center space-x-2 px-3 py-2.5 bg-white hover:bg-rose-50 text-slate-700 hover:text-rose-700 border border-slate-200 hover:border-rose-300 rounded-xl text-xs font-semibold transition shadow-xs cursor-pointer group"
+          className={`flex items-center justify-center bg-white hover:bg-rose-50 text-slate-700 hover:text-rose-700 border border-slate-200 hover:border-rose-300 rounded-xl transition shadow-xs cursor-pointer group ${
+            collapsed ? 'w-10 h-10 p-0 text-rose-600' : 'w-full space-x-2 px-3 py-2.5 text-xs font-semibold'
+          }`}
           title="Sign out of StarRuby Banking ERP"
         >
           <LogOut className="w-4 h-4 text-rose-600 group-hover:text-rose-700 transition shrink-0" />
-          <span>Sign Out</span>
+          {!collapsed && <span>Sign Out</span>}
         </button>
       </div>
     </>
@@ -212,30 +249,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <>
-      {/* Desktop Animated Collapsible Sidebar */}
+      {/* Desktop Collapsible Icon-Rail Sidebar */}
       <aside
-        className={`hidden lg:flex bg-white text-slate-700 flex-col shrink-0 h-full overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] ${
-          isDesktopCollapsed
-            ? 'w-0 opacity-0 border-r-0 pointer-events-none'
-            : 'w-64 opacity-100 border-r border-slate-200/90 pointer-events-auto'
+        className={`hidden lg:flex bg-white text-slate-700 flex-col shrink-0 h-full overflow-hidden transition-all duration-200 ease-in-out border-r border-slate-200/90 ${
+          isDesktopCollapsed ? 'w-16' : 'w-64'
         }`}
       >
-        <div className="w-64 h-full flex flex-col shrink-0">
-          {renderNavContent()}
-        </div>
+        {renderNavContent(isDesktopCollapsed)}
       </aside>
-
-      {/* Floating Expand Tab when Desktop Sidebar is Collapsed */}
-      {isDesktopCollapsed && onToggleDesktop && (
-        <button
-          type="button"
-          onClick={onToggleDesktop}
-          className="hidden lg:flex fixed left-0 top-20 z-30 bg-white hover:bg-rose-50 text-slate-600 hover:text-rose-700 border border-l-0 border-slate-300 rounded-r-xl p-2 shadow-md transition-all cursor-pointer items-center justify-center group"
-          title="Expand Navigation (Open Sidebar)"
-        >
-          <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-rose-600 transition" />
-        </button>
-      )}
 
       {/* Mobile / Tablet Off-Canvas Sliding Drawer */}
       {isRenderedMobile && (

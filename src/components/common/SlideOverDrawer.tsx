@@ -74,9 +74,9 @@ export const SlideOverDrawer: React.FC<SlideOverDrawerProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 overflow-hidden">
-      {/* Backdrop */}
+      {/* Backdrop: Clean, clear, NO blur, subtle tint so background stays 100% sharp and visible */}
       <div
-        className={`fixed inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity duration-300 ease-out ${
+        className={`fixed inset-0 bg-slate-900/10 transition-opacity duration-200 ease-out ${
           isAnimating ? 'opacity-100' : 'opacity-0'
         }`}
         onClick={onClose}
@@ -84,14 +84,14 @@ export const SlideOverDrawer: React.FC<SlideOverDrawerProps> = ({
       />
 
       {/* Drawer Container (Pinned strictly to the Right Edge) */}
-      <div className="fixed inset-y-0 right-0 pl-0 sm:pl-10 max-w-full flex pointer-events-none">
+      <div className="fixed inset-y-0 right-0 max-w-full flex pointer-events-none h-full">
         <div
-          className={`w-screen max-w-full ${resolvedWidth} bg-white shadow-2xl border-l border-slate-200 flex flex-col h-full pointer-events-auto transform transition-transform duration-300 ease-out ${
+          className={`w-full ${resolvedWidth} bg-white shadow-[-8px_0_30px_rgba(0,0,0,0.14)] border-l border-slate-200 flex flex-col h-full pointer-events-auto transform transition-transform duration-250 ease-[cubic-bezier(0.16,1,0.3,1)] ${
             isAnimating ? 'translate-x-0' : 'translate-x-full'
           }`}
         >
           {/* Header */}
-          <div className="p-4 sm:p-5 border-b border-slate-200 bg-slate-50/80 flex items-start justify-between shrink-0">
+          <div className="p-4 sm:p-5 border-b border-slate-200 bg-slate-50/90 flex items-start justify-between shrink-0">
             <div className="space-y-1 pr-3">
               <div className="flex items-center space-x-2 sm:space-x-2.5 flex-wrap gap-y-1">
                 <h2 className="text-sm sm:text-base font-bold font-serif text-slate-900">{title}</h2>
@@ -122,20 +122,20 @@ export const SlideOverDrawer: React.FC<SlideOverDrawerProps> = ({
                 onSubmit(e);
               }
             }}
-            className="flex flex-col flex-1 min-h-0"
+            className="flex flex-col flex-1 min-h-0 h-full overflow-hidden"
           >
-            <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 sm:space-y-5 text-xs">
+            <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-5 space-y-4 text-xs">
               {children}
             </div>
 
-            {/* Footer */}
-            <div className="p-3 sm:p-4 border-t border-slate-200 bg-slate-50/80 flex items-center justify-between shrink-0 gap-2 sm:gap-3">
+            {/* Pinned Sticky Footer - Always in View */}
+            <div className="p-3 sm:p-4 border-t border-slate-200 bg-slate-50/95 flex items-center justify-between shrink-0 gap-3 sticky bottom-0 z-10">
               <div>
                 {onDelete && (
                   <button
                     type="button"
                     onClick={onDelete}
-                    className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-2 text-rose-700 hover:bg-rose-100/70 rounded-lg text-xs font-semibold transition border border-rose-200 cursor-pointer"
+                    className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 text-rose-700 hover:bg-rose-100/70 rounded-lg text-xs font-semibold transition border border-rose-200 cursor-pointer"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                     <span className="hidden xs:inline">{deleteLabel}</span>
@@ -148,7 +148,7 @@ export const SlideOverDrawer: React.FC<SlideOverDrawerProps> = ({
                 <button
                   type="button"
                   onClick={onClose}
-                  className="px-3 sm:px-4 py-2 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-semibold transition cursor-pointer"
+                  className="px-3.5 py-1.5 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-semibold transition cursor-pointer shadow-2xs"
                 >
                   Cancel
                 </button>
@@ -156,7 +156,7 @@ export const SlideOverDrawer: React.FC<SlideOverDrawerProps> = ({
                   <button
                     type="submit"
                     disabled={isSubmitting}
-                    className="px-4 sm:px-5 py-2 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-bold transition shadow-sm cursor-pointer disabled:opacity-50"
+                    className="px-4 sm:px-5 py-1.5 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer disabled:opacity-50"
                   >
                     {isSubmitting ? 'Saving...' : submitLabel}
                   </button>
