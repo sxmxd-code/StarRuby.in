@@ -1058,6 +1058,7 @@ export const MastersModule: React.FC = () => {
                 const roleObj = accessLevels.find(a => a.id === u.access_level_id);
                 const role = roleObj?.level_type || 'Staff';
                 const assigned = userCompanies.filter(uc => uc.user_id === u.id);
+                const unassignedCompanies = companies.filter(c => !assigned.some(a => a.company_id === c.id));
 
                 return (
                   <div key={u.id} className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
@@ -1102,26 +1103,49 @@ export const MastersModule: React.FC = () => {
                           {assigned.length === 0 ? (
                             <span className="text-rose-600 font-semibold text-[11px]">None</span>
                           ) : (
-                            <div className="flex items-center space-x-1">
-                              {assigned.map(uc => (
-                                <span key={uc.company_id} className="bg-slate-200 px-1.5 py-0.5 rounded font-mono text-[10px] font-bold">
-                                  {uc.company_id}
-                                </span>
-                              ))}
+                            <div className="flex items-center space-x-1.5 flex-wrap gap-1">
+                              {assigned.map(uc => {
+                                const comp = companies.find(c => c.id === uc.company_id);
+                                return (
+                                  <span
+                                    key={uc.company_id}
+                                    className="inline-flex items-center space-x-1 bg-slate-100 hover:bg-slate-200/80 border border-slate-300 pl-2 pr-1 py-0.5 rounded font-mono text-[10px] font-bold text-slate-800 transition"
+                                    title={comp ? `${comp.id}: ${comp.full_name}` : uc.company_id}
+                                  >
+                                    <span>{uc.company_id}</span>
+                                    {currentRole === 'Admin' && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          removeCompanyFromUser(u.id, uc.company_id);
+                                          setFeedback(`Unassigned ${uc.company_id} from ${u.full_name}`);
+                                          setTimeout(() => setFeedback(null), 3000);
+                                        }}
+                                        className="text-slate-400 hover:text-rose-600 hover:bg-rose-100 rounded p-0.5 transition cursor-pointer"
+                                        title={`Unassign ${uc.company_id} from ${u.full_name}`}
+                                      >
+                                        <X className="w-2.5 h-2.5" />
+                                      </button>
+                                    )}
+                                  </span>
+                                );
+                              })}
                             </div>
                           )}
-                          {currentRole === 'Admin' && (
+                          {currentRole === 'Admin' && unassignedCompanies.length > 0 && (
                             <select
+                              value=""
                               onChange={e => {
                                 if (e.target.value) {
                                   assignCompanyToUser(u.id, e.target.value);
-                                  e.target.value = '';
+                                  setFeedback(`Assigned ${e.target.value} to ${u.full_name}`);
+                                  setTimeout(() => setFeedback(null), 3000);
                                 }
                               }}
-                              className="text-[11px] bg-white border border-slate-300 rounded px-2 py-1 text-slate-700 cursor-pointer"
+                              className="text-[11px] bg-white border border-slate-300 rounded px-2 py-1 text-slate-700 cursor-pointer hover:border-slate-400 focus:outline-none focus:border-rose-500"
                             >
-                              <option value="">+ Assign Company</option>
-                              {companies.filter(c => !assigned.some(a => a.company_id === c.id)).map(c => (
+                              <option value="" disabled>+ Assign Company</option>
+                              {unassignedCompanies.map(c => (
                                 <option key={c.id} value={c.id}>{c.id}: {c.full_name}</option>
                               ))}
                             </select>
@@ -1643,62 +1667,64 @@ export const MastersModule: React.FC = () => {
             </div>
           )}
 
-          {/* SUB-SECTION: Create New Access Roles Dynamically */}
-          <div className="p-4 bg-purple-50/70 border border-purple-200 rounded-xl space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="font-bold text-purple-900 text-xs flex items-center space-x-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-purple-700" />
-                <span>Create New Access Role (Dynamic)</span>
-              </span>
-              <span className="px-2 py-0.5 bg-purple-200 text-purple-900 font-mono text-[10px] font-bold rounded">
-                Last Access ID: {lastAccessId}
-              </span>
-            </div>
+          {/* SUB-SECTION: Create New Access Roles Dynamically - Strictly for New User Registration */}
+          {selectedUserId === 'NEW' && (
+            <div className="p-4 bg-purple-50/70 border border-purple-200 rounded-xl space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-purple-900 text-xs flex items-center space-x-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-purple-700" />
+                  <span>Create New Access Role (Dynamic)</span>
+                </span>
+                <span className="px-2 py-0.5 bg-purple-200 text-purple-900 font-mono text-[10px] font-bold rounded">
+                  Last Access ID: {lastAccessId}
+                </span>
+              </div>
 
-            <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-purple-900 block mb-0.5">New Access ID</label>
+                  <input
+                    type="text"
+                    value={nextAccessId}
+                    readOnly
+                    className="w-full bg-white border border-purple-300 rounded p-1.5 font-mono text-xs font-bold text-purple-900"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-purple-900 block mb-0.5">Level Type</label>
+                  <select
+                    value={newRoleLevelType}
+                    onChange={e => setNewRoleLevelType(e.target.value as AccessLevelType)}
+                    className="w-full bg-white border border-purple-300 rounded p-1.5 text-xs text-purple-900"
+                  >
+                    <option value="Admin">Admin</option>
+                    <option value="Accountant">Accountant</option>
+                    <option value="Manager">Manager</option>
+                    <option value="Staff">Staff</option>
+                  </select>
+                </div>
+              </div>
+
               <div>
-                <label className="text-[10px] uppercase font-bold text-purple-900 block mb-0.5">New Access ID</label>
+                <label className="text-[10px] uppercase font-bold text-purple-900 block mb-0.5">Role Description</label>
                 <input
                   type="text"
-                  value={nextAccessId}
-                  readOnly
-                  className="w-full bg-white border border-purple-300 rounded p-1.5 font-mono text-xs font-bold text-purple-900"
+                  value={newRoleDesc}
+                  onChange={e => setNewRoleDesc(e.target.value)}
+                  placeholder="e.g. Dubai Treasury Approver"
+                  className="w-full bg-white border border-purple-300 rounded p-1.5 text-xs text-purple-900"
                 />
               </div>
-              <div>
-                <label className="text-[10px] uppercase font-bold text-purple-900 block mb-0.5">Level Type</label>
-                <select
-                  value={newRoleLevelType}
-                  onChange={e => setNewRoleLevelType(e.target.value as AccessLevelType)}
-                  className="w-full bg-white border border-purple-300 rounded p-1.5 text-xs text-purple-900"
-                >
-                  <option value="Admin">Admin</option>
-                  <option value="Accountant">Accountant</option>
-                  <option value="Manager">Manager</option>
-                  <option value="Staff">Staff</option>
-                </select>
-              </div>
-            </div>
 
-            <div>
-              <label className="text-[10px] uppercase font-bold text-purple-900 block mb-0.5">Role Description</label>
-              <input
-                type="text"
-                value={newRoleDesc}
-                onChange={e => setNewRoleDesc(e.target.value)}
-                placeholder="e.g. Dubai Treasury Approver"
-                className="w-full bg-white border border-purple-300 rounded p-1.5 text-xs text-purple-900"
-              />
+              <button
+                type="button"
+                onClick={handleCreateAccessRole}
+                className="w-full py-1.5 bg-purple-700 hover:bg-purple-800 text-white rounded text-xs font-bold transition shadow-xs cursor-pointer"
+              >
+                + Add Access Role to Database
+              </button>
             </div>
-
-            <button
-              type="button"
-              onClick={handleCreateAccessRole}
-              className="w-full py-1.5 bg-purple-700 hover:bg-purple-800 text-white rounded text-xs font-bold transition shadow-xs cursor-pointer"
-            >
-              + Add Access Role to Database
-            </button>
-          </div>
+          )}
         </div>
       </SlideOverDrawer>
 

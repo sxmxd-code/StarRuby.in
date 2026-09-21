@@ -2332,7 +2332,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setUserCompanies(updated);
     save('userCompanies', updated);
     if (supabase) {
-      supabase.from('user_companies').delete().match({ user_id: userId, company_id: companyId }).then(() => {});
+      supabase.from('user_companies').delete().eq('user_id', userId).eq('company_id', companyId).then(() => {});
     }
   };
 

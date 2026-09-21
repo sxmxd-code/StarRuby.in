@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import {
   LayoutDashboard,
@@ -17,6 +17,8 @@ import {
   History,
   LogOut,
   X,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 
 export type NavTab =
@@ -40,6 +42,8 @@ interface SidebarProps {
   setActiveTab: (tab: NavTab) => void;
   isOpenMobile?: boolean;
   onCloseMobile?: () => void;
+  isDesktopCollapsed?: boolean;
+  onToggleDesktop?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -47,7 +51,37 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setActiveTab,
   isOpenMobile = false,
   onCloseMobile,
+  isDesktopCollapsed = false,
+  onToggleDesktop,
 }) => {
+  const [isRenderedMobile, setIsRenderedMobile] = useState(isOpenMobile);
+  const [isAnimatingMobile, setIsAnimatingMobile] = useState(false);
+
+  useEffect(() => {
+    if (isOpenMobile) {
+      setIsRenderedMobile(true);
+      const raf = requestAnimationFrame(() => {
+        setIsAnimatingMobile(true);
+      });
+      return () => cancelAnimationFrame(raf);
+    } else {
+      setIsAnimatingMobile(false);
+      const timer = setTimeout(() => {
+        setIsRenderedMobile(false);
+      }, 250);
+      return () => clearTimeout(timer);
+    }
+  }, [isOpenMobile]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isOpenMobile && onCloseMobile) {
+        onCloseMobile();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpenMobile, onCloseMobile]);
   const {
     scopedUserTransactions,
     partyAliases,
@@ -122,14 +156,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <button
                     key={item.id}
                     onClick={() => handleItemClick(item.id as NavTab)}
-                    className={`w-full flex items-center justify-between px-3 py-2.5 text-xs font-medium rounded-xl transition-all cursor-pointer ${
+                    className={`w-full flex items-center justify-between px-3 py-2.5 text-xs rounded-xl transition-all duration-150 cursor-pointer select-none active:scale-[0.98] ${
                       isActive
-                        ? 'bg-rose-50 text-rose-900 font-bold shadow-xs border-l-4 border-rose-700'
-                        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                        ? 'bg-rose-50 text-rose-950 font-bold shadow-2xs border-l-4 border-rose-700 pl-2.5'
+                        : 'text-slate-600 hover:bg-slate-100/70 hover:text-slate-900 font-medium'
                     }`}
                   >
                     <div className="flex items-center space-x-2.5">
-                      <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-rose-700' : 'text-slate-400'}`} />
+                      <Icon className={`w-4 h-4 shrink-0 transition-colors duration-150 ${isActive ? 'text-rose-700' : 'text-slate-400'}`} />
                       <span className="truncate">{item.label}</span>
                     </div>
 
@@ -146,8 +180,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ))}
       </div>
 
-      {/* Bottom Pinned Sign Out Action */}
-      <div className="p-3 border-t border-slate-200/90 bg-slate-50/90 shrink-0">
+      {/* Bottom Pinned Actions: Collapse Toggle (Desktop only) + Sign Out */}
+      <div className="p-3 border-t border-slate-200/90 bg-slate-50/90 shrink-0 space-y-2">
+        {onToggleDesktop && (
+          <button
+            type="button"
+            onClick={onToggleDesktop}
+            className="hidden lg:flex w-full items-center justify-center space-x-1.5 py-1.5 px-3 text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 rounded-xl text-[11px] font-medium transition cursor-pointer"
+            title="Collapse Sidebar"
+          >
+            <ChevronLeft className="w-3.5 h-3.5" />
+            <span>Collapse Sidebar</span>
+          </button>
+        )}
+
         <button
           onClick={() => {
             if (window.confirm(`Sign out of ${currentUser.full_name}'s session?`)) {
@@ -166,22 +212,49 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <>
-      {/* Desktop Permanent Static Sidebar (Hidden on < lg) */}
-      <aside className="hidden lg:flex w-64 bg-white border-r border-slate-200/90 text-slate-700 flex-col shrink-0 h-full overflow-hidden">
-        {renderNavContent()}
+      {/* Desktop Animated Collapsible Sidebar */}
+      <aside
+        className={`hidden lg:flex bg-white text-slate-700 flex-col shrink-0 h-full overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+          isDesktopCollapsed
+            ? 'w-0 opacity-0 border-r-0 pointer-events-none'
+            : 'w-64 opacity-100 border-r border-slate-200/90 pointer-events-auto'
+        }`}
+      >
+        <div className="w-64 h-full flex flex-col shrink-0">
+          {renderNavContent()}
+        </div>
       </aside>
 
-      {/* Mobile / Tablet Off-Canvas Sliding Drawer (Visible when isOpenMobile is true on < lg) */}
-      {isOpenMobile && (
+      {/* Floating Expand Tab when Desktop Sidebar is Collapsed */}
+      {isDesktopCollapsed && onToggleDesktop && (
+        <button
+          type="button"
+          onClick={onToggleDesktop}
+          className="hidden lg:flex fixed left-0 top-20 z-30 bg-white hover:bg-rose-50 text-slate-600 hover:text-rose-700 border border-l-0 border-slate-300 rounded-r-xl p-2 shadow-md transition-all cursor-pointer items-center justify-center group"
+          title="Expand Navigation (Open Sidebar)"
+        >
+          <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-rose-600 transition" />
+        </button>
+      )}
+
+      {/* Mobile / Tablet Off-Canvas Sliding Drawer */}
+      {isRenderedMobile && (
         <div className="fixed inset-0 z-50 lg:hidden flex">
-          {/* Backdrop blur overlay */}
+          {/* Backdrop blur overlay with smooth fade */}
           <div
-            className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs transition-opacity animate-in fade-in duration-200"
+            className={`fixed inset-0 bg-slate-900/50 backdrop-blur-xs transition-opacity duration-250 ease-out ${
+              isAnimatingMobile ? 'opacity-100' : 'opacity-0'
+            }`}
             onClick={onCloseMobile}
+            aria-hidden="true"
           />
 
-          {/* Off-canvas panel */}
-          <aside className="relative w-72 max-w-[85vw] bg-white text-slate-700 flex flex-col h-full shadow-2xl z-10 animate-in slide-in-from-left duration-200 border-r border-slate-200">
+          {/* Off-canvas panel with smooth slide */}
+          <aside
+            className={`relative w-72 max-w-[85vw] bg-white text-slate-700 flex flex-col h-full shadow-2xl z-10 border-r border-slate-200 transform transition-transform duration-250 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+              isAnimatingMobile ? 'translate-x-0' : '-translate-x-full'
+            }`}
+          >
             <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between shrink-0">
               <div className="flex items-center space-x-2">
                 <span className="text-sm font-bold text-slate-900 font-serif">Navigation</span>

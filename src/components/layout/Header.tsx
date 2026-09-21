@@ -5,9 +5,16 @@ import { Building2, Crown, Calculator, Briefcase, BadgeCheck, Menu, X } from 'lu
 interface HeaderProps {
   onToggleMobileNav?: () => void;
   isMobileNavOpen?: boolean;
+  onToggleDesktopNav?: () => void;
+  isDesktopNavCollapsed?: boolean;
 }
 
-export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav, isMobileNavOpen }) => {
+export const Header: React.FC<HeaderProps> = ({
+  onToggleMobileNav,
+  isMobileNavOpen = false,
+  onToggleDesktopNav,
+  isDesktopNavCollapsed = false,
+}) => {
   const {
     currentUser,
     currentRole,
@@ -61,15 +68,30 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav, isMobileNavOp
 
       <div className="w-full px-3 sm:px-6 flex items-center justify-between h-16">
         
-        {/* Left: Hamburger (Mobile) & Brand Logo */}
+        {/* Left: Hamburger / Sidebar Toggle & Brand Logo */}
         <div className="flex items-center space-x-2 sm:space-x-3.5 shrink-0">
           <button
             type="button"
-            onClick={onToggleMobileNav}
-            className="lg:hidden p-2 -ml-1.5 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition cursor-pointer"
+            onClick={() => {
+              if (window.innerWidth >= 1024) {
+                if (onToggleDesktopNav) onToggleDesktopNav();
+              } else {
+                if (onToggleMobileNav) onToggleMobileNav();
+              }
+            }}
+            className="p-2 -ml-1.5 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition cursor-pointer flex items-center justify-center group"
+            title={
+              (window.innerWidth < 1024 && isMobileNavOpen) || (window.innerWidth >= 1024 && !isDesktopNavCollapsed)
+                ? 'Collapse Sidebar'
+                : 'Open Sidebar'
+            }
             aria-label="Toggle Navigation Menu"
           >
-            {isMobileNavOpen ? <X className="w-5 h-5 text-rose-700" /> : <Menu className="w-5 h-5" />}
+            {isMobileNavOpen ? (
+              <X className="w-5 h-5 text-rose-700 transition" />
+            ) : (
+              <Menu className="w-5 h-5 text-slate-700 group-hover:text-rose-700 transition" />
+            )}
           </button>
 
           <img

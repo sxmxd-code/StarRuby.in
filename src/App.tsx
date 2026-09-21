@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AppProvider } from './context/AppContext';
 import { Header } from './components/layout/Header';
 import { Sidebar, NavTab } from './components/layout/Sidebar';
@@ -61,6 +61,33 @@ const MainLayout: React.FC = () => {
   };
 
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+  const [isDesktopNavCollapsed, setIsDesktopNavCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem('starruby_sidebar_collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const mainScrollRef = useRef<HTMLElement>(null);
+
+  // Smooth scroll to top whenever module switches
+  useEffect(() => {
+    if (mainScrollRef.current) {
+      mainScrollRef.current.scrollTop = 0;
+    }
+  }, [activeTab]);
+
+  const toggleDesktopNav = () => {
+    setIsDesktopNavCollapsed(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem('starruby_sidebar_collapsed', String(next));
+      } catch {}
+      return next;
+    });
+  };
+
   const { lastRealtimeNotice } = useApp();
 
   return (
@@ -68,6 +95,8 @@ const MainLayout: React.FC = () => {
       <Header
         onToggleMobileNav={() => setIsMobileNavOpen(prev => !prev)}
         isMobileNavOpen={isMobileNavOpen}
+        onToggleDesktopNav={toggleDesktopNav}
+        isDesktopNavCollapsed={isDesktopNavCollapsed}
       />
 
       <div className="flex-1 flex overflow-hidden min-h-0 relative">
@@ -76,23 +105,30 @@ const MainLayout: React.FC = () => {
           setActiveTab={setActiveTab}
           isOpenMobile={isMobileNavOpen}
           onCloseMobile={() => setIsMobileNavOpen(false)}
+          isDesktopCollapsed={isDesktopNavCollapsed}
+          onToggleDesktop={toggleDesktopNav}
         />
 
-        <main className="flex-1 overflow-y-auto p-3 sm:p-5 lg:p-8 w-full min-h-0">
-          {activeTab === 'dashboard' && <DashboardModule onNavigate={setActiveTab} />}
-          {activeTab === 'masters' && <MastersModule />}
-          {activeTab === 'user_entry' && <UserEntryModule />}
-          {activeTab === 'bank_entry' && <BankEntryModule />}
-          {activeTab === 'duplicates' && <DuplicatesModule />}
-          {activeTab === 'aliases' && <PartyAliasesModule />}
-          {activeTab === 'match' && <MatchModule />}
-          {activeTab === 'approvals' && <ApprovalsModule />}
-          {activeTab === 'discrepancies' && <DiscrepanciesModule onNavigateToMatch={() => setActiveTab('match')} />}
-          {activeTab === 'pending_queue' && <PendingQueueModule />}
-          {activeTab === 'statement_uploads' && <StatementUploadsModule />}
-          {activeTab === 'statement_ledger' && <StatementReconciliationModule />}
-          {activeTab === 'documents' && <DocumentsModule />}
-          {activeTab === 'versions' && <VersionHistoryModule />}
+        <main
+          ref={mainScrollRef}
+          className="flex-1 overflow-y-auto p-3 sm:p-5 lg:p-8 w-full min-h-0"
+        >
+          <div key={activeTab} className="animate-module-enter w-full min-h-full">
+            {activeTab === 'dashboard' && <DashboardModule onNavigate={setActiveTab} />}
+            {activeTab === 'masters' && <MastersModule />}
+            {activeTab === 'user_entry' && <UserEntryModule />}
+            {activeTab === 'bank_entry' && <BankEntryModule />}
+            {activeTab === 'duplicates' && <DuplicatesModule />}
+            {activeTab === 'aliases' && <PartyAliasesModule />}
+            {activeTab === 'match' && <MatchModule />}
+            {activeTab === 'approvals' && <ApprovalsModule />}
+            {activeTab === 'discrepancies' && <DiscrepanciesModule onNavigateToMatch={() => setActiveTab('match')} />}
+            {activeTab === 'pending_queue' && <PendingQueueModule />}
+            {activeTab === 'statement_uploads' && <StatementUploadsModule />}
+            {activeTab === 'statement_ledger' && <StatementReconciliationModule />}
+            {activeTab === 'documents' && <DocumentsModule />}
+            {activeTab === 'versions' && <VersionHistoryModule />}
+          </div>
         </main>
       </div>
 
