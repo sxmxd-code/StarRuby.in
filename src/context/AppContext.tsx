@@ -171,7 +171,7 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-const LOCAL_STORAGE_KEY = 'starruby_banking_system_state_v2';
+const LOCAL_STORAGE_KEY = 'starruby_banking_system_state_v3';
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Helper to load or fallback to initial seed
@@ -347,7 +347,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setUserCompanies(ucRes.data);
           save('userCompanies', ucRes.data);
         }
-        if (!accRes.error && accRes.data && accRes.data.length > 0) {
+        if (!accRes.error && Array.isArray(accRes.data)) {
           setAccounts(accRes.data);
           save('accounts', accRes.data);
         }
@@ -355,7 +355,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setSignatories(sigRes.data);
           save('signatories', sigRes.data);
         }
-        if (!ptyRes.error && ptyRes.data && ptyRes.data.length > 0) {
+        if (!ptyRes.error && Array.isArray(ptyRes.data)) {
           setParties(ptyRes.data);
           save('parties', ptyRes.data);
         }
@@ -522,6 +522,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             return next;
           });
           notifyRealtime(`Live Sync: Party alias ${row.alias_name} updated`);
+        } else if (payload.eventType === 'DELETE') {
+          const oldId = (payload.old as any).id;
+          setPartyAliases(prev => {
+            const next = prev.filter(a => a.id !== oldId);
+            save('partyAliases', next);
+            return next;
+          });
         }
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'parties' }, (payload) => {
@@ -533,6 +540,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             return next;
           });
           notifyRealtime(`Live Sync: Party ${row.system_name || row.party_name} updated`);
+        } else if (payload.eventType === 'DELETE') {
+          const oldId = (payload.old as any).id;
+          setParties(prev => {
+            const next = prev.filter(p => p.id !== oldId);
+            save('parties', next);
+            return next;
+          });
+          notifyRealtime('Live Sync: Party removed');
         }
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'party_description_templates' }, (payload) => {
@@ -540,6 +555,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const row = payload.new as PartyDescriptionTemplate;
           setPartyTemplates(prev => {
             const next = [...prev.filter(t => t.id !== row.id), row];
+            save('partyTemplates', next);
+            return next;
+          });
+        } else if (payload.eventType === 'DELETE') {
+          const oldId = (payload.old as any).id;
+          setPartyTemplates(prev => {
+            const next = prev.filter(t => t.id !== oldId);
             save('partyTemplates', next);
             return next;
           });
@@ -554,6 +576,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             return next;
           });
           notifyRealtime(`Live Sync: Expected payment queue updated`);
+        } else if (payload.eventType === 'DELETE') {
+          const oldId = (payload.old as any).id;
+          setPendingTransactions(prev => {
+            const next = prev.filter(p => p.id !== oldId);
+            save('pendingTransactions', next);
+            return next;
+          });
         }
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'statement_uploads' }, (payload) => {
@@ -565,6 +594,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             return next;
           });
           notifyRealtime(`Live Sync: Bank statement uploaded for ${row.account_id}`);
+        } else if (payload.eventType === 'DELETE') {
+          const oldId = (payload.old as any).id;
+          setStatementUploads(prev => {
+            const next = prev.filter(s => s.id !== oldId);
+            save('statementUploads', next);
+            return next;
+          });
         }
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'documents' }, (payload) => {
@@ -601,6 +637,83 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setAccounts(prev => {
             const next = [...prev.filter(a => a.id !== row.id), row];
             save('accounts', next);
+            return next;
+          });
+          notifyRealtime(`Live Sync: Bank account ${row.bank_name} updated`);
+        } else if (payload.eventType === 'DELETE') {
+          const oldId = (payload.old as any).id;
+          setAccounts(prev => {
+            const next = prev.filter(a => a.id !== oldId);
+            save('accounts', next);
+            return next;
+          });
+          notifyRealtime(`Live Sync: Bank account ${oldId} removed`);
+        }
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'companies' }, (payload) => {
+        if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+          const row = payload.new as Company;
+          setCompanies(prev => {
+            const next = [...prev.filter(c => c.id !== row.id), row];
+            save('companies', next);
+            return next;
+          });
+        } else if (payload.eventType === 'DELETE') {
+          const oldId = (payload.old as any).id;
+          setCompanies(prev => {
+            const next = prev.filter(c => c.id !== oldId);
+            save('companies', next);
+            return next;
+          });
+        }
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, (payload) => {
+        if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+          const row = payload.new as User;
+          setUsers(prev => {
+            const next = [...prev.filter(u => u.id !== row.id), row];
+            save('users', next);
+            return next;
+          });
+        } else if (payload.eventType === 'DELETE') {
+          const oldId = (payload.old as any).id;
+          setUsers(prev => {
+            const next = prev.filter(u => u.id !== oldId);
+            save('users', next);
+            return next;
+          });
+        }
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_companies' }, (payload) => {
+        if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+          const row = payload.new as UserCompany;
+          setUserCompanies(prev => {
+            const next = [...prev.filter(uc => !(uc.user_id === row.user_id && uc.company_id === row.company_id)), row];
+            save('userCompanies', next);
+            return next;
+          });
+        } else if (payload.eventType === 'DELETE') {
+          const oldRow = payload.old as any;
+          setUserCompanies(prev => {
+            const next = prev.filter(uc => !(uc.user_id === oldRow.user_id && uc.company_id === oldRow.company_id));
+            save('userCompanies', next);
+            return next;
+          });
+        }
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'account_signatories' }, (payload) => {
+        if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+          const row = payload.new as AccountSignatory;
+          setSignatories(prev => {
+            const next = [...prev.filter(s => !(s.account_id === row.account_id && s.user_id === row.user_id)), row];
+            save('signatories', next);
+            return next;
+          });
+        } else if (payload.eventType === 'DELETE') {
+          const oldRow = payload.old as any;
+          setSignatories(prev => {
+            const next = prev.filter(s => !(s.account_id === oldRow.account_id && s.user_id === oldRow.user_id));
+            save('signatories', next);
             return next;
           });
         }
@@ -2441,11 +2554,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setCompanies(cleanedCompanies);
       save('companies', cleanedCompanies);
 
-      // 4. Keep core bank accounts
-      const coreAccountIds = ['BNK1', 'BNK2', 'BNK3', 'BNK4'];
-      const cleanedAccounts = accounts.filter(a => coreAccountIds.includes(a.id));
-      setAccounts(cleanedAccounts);
-      save('accounts', cleanedAccounts);
+      // 4. Wipe accounts, signatories, parties, templates, and aliases
+      setAccounts([]);
+      save('accounts', []);
+
+      setSignatories([]);
+      save('signatories', []);
+
+      setParties([]);
+      save('parties', []);
+
+      setPartyAliases([]);
+      save('partyAliases', []);
+
+      setPartyTemplates([]);
+      save('partyTemplates', []);
 
       // 5. Supabase call
       if (supabase) {
@@ -2463,6 +2586,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             await supabase.from('transactions_user').delete().neq('id', 'NONE');
             await supabase.from('transactions_bank').delete().neq('id', 'NONE');
             await supabase.from('password_reset_requests').delete().neq('id', 'NONE');
+            await supabase.from('account_signatories').delete().neq('account_id', 'NONE');
+            await supabase.from('accounts').delete().neq('id', 'NONE');
+            await supabase.from('party_description_templates').delete().neq('id', 'NONE');
+            await supabase.from('party_aliases').delete().neq('id', 'NONE');
+            await supabase.from('parties').delete().neq('id', 'NONE');
           }
         } catch (supaErr) {
           console.warn('Supabase reset warning:', supaErr);

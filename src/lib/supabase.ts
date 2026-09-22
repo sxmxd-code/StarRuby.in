@@ -65,144 +65,15 @@ export const initialUserCompanies: UserCompany[] = [
   { user_id: 'USR5', company_id: 'COM1', assigned_by: 'USR1', assigned_at: '2026-09-01T10:00:00Z' },
 ];
 
-export const initialAccounts: Account[] = [
-  {
-    id: 'BNK1',
-    company_id: 'COM1',
-    bank_name: 'ICICI Bank Limited',
-    bank_country: 'India',
-    account_number: '03213546436',
-    account_holder: 'StarRuby.in Private Limited',
-    account_currency: 'INR',
-    ifsc_code: 'ICIC0000321',
-    bank_branch: '701, Level 7, Hubtown Solaris, Andheri East, Mumbai 400069',
-    created_at: '2026-09-01T10:00:00Z',
-  },
-  {
-    id: 'BNK2',
-    company_id: 'COM1',
-    bank_name: 'Kotak Mahindra Bank',
-    bank_country: 'India',
-    account_number: '9812401822',
-    account_holder: 'StarRuby.in Private Limited',
-    account_currency: 'INR',
-    ifsc_code: 'KKBK0000669',
-    bank_branch: 'BKC Branch, Bandra East, Mumbai 400051',
-    created_at: '2026-09-01T10:00:00Z',
-  },
-  {
-    id: 'BNK3',
-    company_id: 'COM2',
-    bank_name: 'Emirates NBD',
-    bank_country: 'UAE',
-    account_number: '10192837465',
-    iban_number: 'AE190110656330200019842',
-    swift_code: 'BOMLAEAD',
-    account_holder: 'Star Ruby Gems DMCC',
-    account_currency: 'AED',
-    bank_branch: 'Almas Tower, JLT, Dubai, UAE',
-    created_at: '2026-09-01T10:00:00Z',
-  },
-  {
-    id: 'BNK4',
-    company_id: 'COM2',
-    bank_name: 'Emirates NBD',
-    bank_country: 'UAE',
-    account_number: '10192837499',
-    iban_number: 'AE190110656330200019899',
-    swift_code: 'BOMLAEAD',
-    account_holder: 'Star Ruby Gems DMCC',
-    account_currency: 'USD',
-    bank_branch: 'Almas Tower, JLT, Dubai, UAE',
-    created_at: '2026-09-01T10:00:00Z',
-  },
-];
+export const initialAccounts: Account[] = [];
 
-export const initialSignatories: AccountSignatory[] = [
-  { account_id: 'BNK1', user_id: 'USR1' },
-  { account_id: 'BNK1', user_id: 'USR2' },
-  { account_id: 'BNK2', user_id: 'USR1' },
-  { account_id: 'BNK3', user_id: 'USR2' },
-  { account_id: 'BNK4', user_id: 'USR2' },
-];
+export const initialSignatories: AccountSignatory[] = [];
 
-export const initialParties: Party[] = [
-  {
-    id: 'PTY101',
-    system_name: 'Blue Ocean Trading LLC',
-    party_name: 'Blue Ocean Trading',
-    group_name: 'Dubai Gem Vendors',
-    cid_number: 'CID10001',
-    bank_name: 'Mashreq Bank',
-    bank_country: 'UAE',
-    account_number: '0192837465',
-    account_currency: 'AED',
-    created_at: '2026-09-01T10:00:00Z',
-  },
-  {
-    id: 'PTY102',
-    system_name: 'Vismay P. Zaveri',
-    party_name: 'VismayZaveri',
-    group_name: 'Directors & Promoters',
-    bank_name: 'ICICI Bank',
-    bank_country: 'India',
-    account_number: '03213546436',
-    account_currency: 'INR',
-    created_at: '2026-09-01T10:00:00Z',
-  },
-  {
-    id: 'PTY103',
-    system_name: 'Bangkok Gems & Stones Co.',
-    party_name: 'Bangkok Gems',
-    group_name: 'Thailand Suppliers',
-    cid_number: 'CID10002',
-    bank_name: 'Kasikornbank',
-    bank_country: 'Thailand',
-    account_currency: 'USD',
-    created_at: '2026-09-01T10:00:00Z',
-  },
-  {
-    id: 'PTY104',
-    system_name: 'Gemological Institute of America',
-    party_name: 'GIA India',
-    group_name: 'Certification Labs',
-    bank_name: 'HDFC Bank',
-    bank_country: 'India',
-    account_currency: 'INR',
-    created_at: '2026-09-01T10:00:00Z',
-  },
-  {
-    id: 'PTY105',
-    system_name: 'FedEx Express India',
-    party_name: 'FedEx Courier',
-    group_name: 'Logistics Partners',
-    bank_name: 'CitiBank',
-    bank_country: 'India',
-    account_currency: 'INR',
-    created_at: '2026-09-01T10:00:00Z',
-  },
-];
+export const initialParties: Party[] = [];
 
-export const initialPartyAliases: PartyAlias[] = [
-  { id: 'PALIAS1', alias_name: 'Blue Ocean Trading', alias_normalized: 'blue ocean trading', party_id: 'PTY101', status: 'mapped', created_by: 'USR3', created_at: '2026-09-01T10:00:00Z' },
-  { id: 'PALIAS2', alias_name: 'Blue Ocean LLC', alias_normalized: 'blue ocean llc', party_id: 'PTY101', status: 'mapped', created_by: 'USR3', created_at: '2026-09-01T10:00:00Z' },
-  { id: 'PALIAS3', alias_name: 'VismayZaveri', alias_normalized: 'vismayzaveri', party_id: 'PTY102', status: 'mapped', created_by: 'USR1', created_at: '2026-09-01T10:00:00Z' },
-  { id: 'PALIAS4', alias_name: 'Vismay P. Zaveri', alias_normalized: 'vismay p zaveri', party_id: 'PTY102', status: 'mapped', created_by: 'USR1', created_at: '2026-09-01T10:00:00Z' },
-  { id: 'PALIAS5', alias_name: 'Bangkok Gems', alias_normalized: 'bangkok gems', party_id: 'PTY103', status: 'mapped', created_by: 'USR4', created_at: '2026-09-01T10:00:00Z' },
-  { id: 'PALIAS6', alias_name: 'GIA India Lab', alias_normalized: 'gia india lab', party_id: 'PTY104', status: 'mapped', created_by: 'USR3', created_at: '2026-09-01T10:00:00Z' },
-  { id: 'PALIAS7', alias_name: 'FedEx Courier', alias_normalized: 'fedex courier', party_id: 'PTY105', status: 'mapped', created_by: 'USR3', created_at: '2026-09-01T10:00:00Z' },
-  // Unmapped test candidates
-  { id: 'PALIAS8', alias_name: 'Blue Ocean Trading Co.', alias_normalized: 'blue ocean trading co', party_id: undefined, status: 'unmapped', suggested_party_id: 'PTY101', created_by: 'USR3', created_at: '2026-09-10T11:00:00Z' },
-  { id: 'PALIAS9', alias_name: 'CASH DEPOSIT MUMBAI', alias_normalized: 'cash deposit mumbai', party_id: undefined, status: 'unmapped', created_by: 'USR3', created_at: '2026-09-11T12:00:00Z' },
-];
+export const initialPartyAliases: PartyAlias[] = [];
 
-export const initialPartyTemplates: PartyDescriptionTemplate[] = [
-  { id: 'TPL1', party_id: 'PTY101', template_text: 'Advance payment for rough ruby lot shipment', use_count: 15, source: 'manual', created_by: 'USR3', created_at: '2026-09-01T10:00:00Z' },
-  { id: 'TPL2', party_id: 'PTY101', template_text: 'Settlement of Invoice INV-2026-88', use_count: 8, source: 'manual', created_by: 'USR3', created_at: '2026-09-01T10:00:00Z' },
-  { id: 'TPL3', party_id: 'PTY103', template_text: 'Star Sapphire certified cabochons lot purchase', use_count: 22, source: 'manual', created_by: 'USR4', created_at: '2026-09-01T10:00:00Z' },
-  { id: 'TPL4', party_id: 'PTY104', template_text: 'Diamond grading and certification charges', use_count: 34, source: 'manual', created_by: 'USR3', created_at: '2026-09-01T10:00:00Z' },
-  { id: 'TPL5', party_id: 'PTY105', template_text: 'International insured courier freight charges', use_count: 19, source: 'manual', created_by: 'USR3', created_at: '2026-09-01T10:00:00Z' },
-];
+export const initialPartyTemplates: PartyDescriptionTemplate[] = [];
 
 export const initialAppSettings: AppSetting[] = [
   { setting_key: 'duplicate_date_window_days', setting_value: '3', description: 'Days tolerance when scanning for duplicates (± 3 days)' },

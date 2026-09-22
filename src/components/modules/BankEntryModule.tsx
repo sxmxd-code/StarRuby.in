@@ -109,13 +109,18 @@ export const BankEntryModule: React.FC = () => {
               <select
                 value={selectedAccountId}
                 onChange={e => setSelectedAccountId(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs"
+                disabled={scopedAccounts.length === 0}
+                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs disabled:opacity-60"
               >
-                {scopedAccounts.map(acc => (
-                  <option key={acc.id} value={acc.id}>
-                    {acc.id} &bull; {acc.bank_name} ({acc.account_currency})
-                  </option>
-                ))}
+                {scopedAccounts.length === 0 ? (
+                  <option value="">No bank accounts available</option>
+                ) : (
+                  scopedAccounts.map(acc => (
+                    <option key={acc.id} value={acc.id}>
+                      {acc.id} &bull; {acc.bank_name} ({acc.account_currency})
+                    </option>
+                  ))
+                )}
               </select>
             </div>
 

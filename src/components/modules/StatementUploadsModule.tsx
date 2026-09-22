@@ -147,7 +147,14 @@ export const StatementUploadsModule: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredAccounts.map(acc => (
+              {filteredAccounts.length === 0 ? (
+                <tr>
+                  <td colSpan={13} className="py-12 text-center text-slate-400 text-xs">
+                    No bank accounts registered. Add your bank accounts in Masters &amp; Setup to track statement uploads.
+                  </td>
+                </tr>
+              ) : (
+                filteredAccounts.map(acc => (
                 <tr key={acc.id} className="hover:bg-slate-50/50">
                   <td className="p-3 text-left">
                     <span className="font-bold text-slate-900 block">{acc.id}</span>
@@ -185,7 +192,7 @@ export const StatementUploadsModule: React.FC = () => {
                     );
                   })}
                 </tr>
-              ))}
+              )))}
             </tbody>
           </table>
         </div>

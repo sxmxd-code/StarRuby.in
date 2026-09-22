@@ -62,16 +62,27 @@ export const StatementReconciliationModule: React.FC = () => {
           <select
             value={selectedAccountId}
             onChange={e => setSelectedAccountId(e.target.value)}
-            className="bg-slate-50 border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 font-medium"
+            disabled={scopedAccounts.length === 0}
+            className="bg-slate-50 border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 font-medium disabled:opacity-60"
           >
-            {scopedAccounts.map(acc => (
-              <option key={acc.id} value={acc.id}>
-                {acc.id} &bull; {acc.bank_name} ({acc.account_currency})
-              </option>
-            ))}
+            {scopedAccounts.length === 0 ? (
+              <option value="">No Accounts Available</option>
+            ) : (
+              scopedAccounts.map(acc => (
+                <option key={acc.id} value={acc.id}>
+                  {acc.id} &bull; {acc.bank_name} ({acc.account_currency})
+                </option>
+              ))
+            )}
           </select>
         </div>
       </div>
+
+      {!activeAccount && (
+        <div className="bg-white p-8 rounded-xl border border-slate-200 text-center text-xs text-slate-400">
+          No bank accounts registered. Please add a bank account in Masters &amp; Setup.
+        </div>
+      )}
 
       {/* Account Balance Summary Card */}
       {activeAccount && (

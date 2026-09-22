@@ -1234,69 +1234,84 @@ export const MastersModule: React.FC = () => {
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {(currentRole === 'Manager' ? scopedAccounts : accounts).map(acc => {
-              const comp = companies.find(c => c.id === acc.company_id);
-              const sigs = signatories.filter(s => s.account_id === acc.id);
+          {(currentRole === 'Manager' ? scopedAccounts : accounts).length === 0 ? (
+            <div className="p-8 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200">
+              <p className="text-xs text-slate-500 mb-2">
+                No bank accounts registered yet.
+              </p>
+              <button
+                type="button"
+                onClick={openAddAccountDrawer}
+                className="px-3.5 py-1.5 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-semibold cursor-pointer shadow-xs inline-flex items-center space-x-1"
+              >
+                <span>+ Add Bank Account</span>
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {(currentRole === 'Manager' ? scopedAccounts : accounts).map(acc => {
+                const comp = companies.find(c => c.id === acc.company_id);
+                const sigs = signatories.filter(s => s.account_id === acc.id);
 
-              return (
-                <div
-                  key={acc.id}
-                  className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-white hover:border-rose-300 transition space-y-2.5 text-xs shadow-xs"
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-2">
-                      <span className="font-bold text-blue-900 font-mono text-sm">{acc.id}</span>
-                      <span className="font-mono font-bold text-rose-700 px-2 py-0.5 bg-rose-50 rounded border border-rose-200">
-                        {acc.account_currency}
-                      </span>
-                    </div>
-                    <div className="flex items-center space-x-1">
-                      <button
-                        onClick={() => openEditAccountDrawer(acc)}
-                        className="p-1 text-slate-400 hover:text-rose-700 hover:bg-rose-50 rounded transition cursor-pointer"
-                        title="Edit Account"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => {
-                          if (window.confirm(`Delete Bank Account ${acc.id} (${acc.bank_name})?`)) {
-                            const res = deleteAccount(acc.id);
-                            if (!res.success) {
-                              alert(res.error || 'Failed to delete bank account.');
-                              return;
+                return (
+                  <div
+                    key={acc.id}
+                    className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-white hover:border-rose-300 transition space-y-2.5 text-xs shadow-xs"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <span className="font-bold text-blue-900 font-mono text-sm">{acc.id}</span>
+                        <span className="font-mono font-bold text-rose-700 px-2 py-0.5 bg-rose-50 rounded border border-rose-200">
+                          {acc.account_currency}
+                        </span>
+                      </div>
+                      <div className="flex items-center space-x-1">
+                        <button
+                          onClick={() => openEditAccountDrawer(acc)}
+                          className="p-1 text-slate-400 hover:text-rose-700 hover:bg-rose-50 rounded transition cursor-pointer"
+                          title="Edit Account"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (window.confirm(`Delete Bank Account ${acc.id} (${acc.bank_name})?`)) {
+                              const res = deleteAccount(acc.id);
+                              if (!res.success) {
+                                alert(res.error || 'Failed to delete bank account.');
+                                return;
+                              }
+                              setFeedback(`Account ${acc.id} deleted.`);
+                              setTimeout(() => setFeedback(null), 4000);
                             }
-                            setFeedback(`Account ${acc.id} deleted.`);
-                            setTimeout(() => setFeedback(null), 4000);
-                          }
-                        }}
-                        className="p-1 text-slate-400 hover:text-rose-700 hover:bg-rose-50 rounded transition cursor-pointer"
-                        title="Delete Account"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                          }}
+                          className="p-1 text-slate-400 hover:text-rose-700 hover:bg-rose-50 rounded transition cursor-pointer"
+                          title="Delete Account"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <h3 className="font-bold text-slate-900 text-sm">{acc.bank_name}</h3>
+                      <p className="text-slate-600 font-mono mt-0.5">Acc: {acc.account_number}</p>
+                      <p className="text-slate-500">Company: {comp?.full_name}</p>
+                      {acc.ifsc_code && <p className="text-slate-500 font-mono">IFSC: {acc.ifsc_code}</p>}
+                      {acc.iban_number && <p className="text-slate-500 font-mono">IBAN: {acc.iban_number}</p>}
+                      {acc.swift_code && <p className="text-slate-500 font-mono">SWIFT: {acc.swift_code}</p>}
+                      {acc.bank_branch && <p className="text-slate-400 text-[11px] truncate">Branch: {acc.bank_branch}</p>}
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-200/60 text-[11px] text-slate-600">
+                      <span className="font-semibold">Signatories:</span>{' '}
+                      {sigs.map(s => allUsers.find(u => u.id === s.user_id)?.full_name).join(', ') || 'None assigned'}
                     </div>
                   </div>
-
-                  <div>
-                    <h3 className="font-bold text-slate-900 text-sm">{acc.bank_name}</h3>
-                    <p className="text-slate-600 font-mono mt-0.5">Acc: {acc.account_number}</p>
-                    <p className="text-slate-500">Company: {comp?.full_name}</p>
-                    {acc.ifsc_code && <p className="text-slate-500 font-mono">IFSC: {acc.ifsc_code}</p>}
-                    {acc.iban_number && <p className="text-slate-500 font-mono">IBAN: {acc.iban_number}</p>}
-                    {acc.swift_code && <p className="text-slate-500 font-mono">SWIFT: {acc.swift_code}</p>}
-                    {acc.bank_branch && <p className="text-slate-400 text-[11px] truncate">Branch: {acc.bank_branch}</p>}
-                  </div>
-
-                  <div className="pt-2 border-t border-slate-200/60 text-[11px] text-slate-600">
-                    <span className="font-semibold">Signatories:</span>{' '}
-                    {sigs.map(s => allUsers.find(u => u.id === s.user_id)?.full_name).join(', ') || 'None assigned'}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -1340,7 +1355,20 @@ export const MastersModule: React.FC = () => {
             </div>
           </div>
 
-          {displayedPartiesList.length === 0 ? (
+          {parties.length === 0 ? (
+            <div className="p-8 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200">
+              <p className="text-xs text-slate-500 mb-2">
+                No outside parties registered yet.
+              </p>
+              <button
+                type="button"
+                onClick={openAddPartyDrawer}
+                className="px-3.5 py-1.5 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-semibold cursor-pointer shadow-xs inline-flex items-center space-x-1"
+              >
+                <span>+ Add Party</span>
+              </button>
+            </div>
+          ) : displayedPartiesList.length === 0 ? (
             <div className="p-8 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200">
               <p className="text-xs text-slate-500 mb-2">
                 No parties found matching &ldquo;{partiesListSearchQuery}&rdquo;.
