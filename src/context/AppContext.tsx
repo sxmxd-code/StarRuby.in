@@ -171,7 +171,7 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-const LOCAL_STORAGE_KEY = 'starruby_banking_system_state_v1';
+const LOCAL_STORAGE_KEY = 'starruby_banking_system_state_v2';
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Helper to load or fallback to initial seed
@@ -335,79 +335,79 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         if (!isMounted) return;
 
-        if (compRes.data && compRes.data.length > 0) {
+        if (!compRes.error && compRes.data && compRes.data.length > 0) {
           setCompanies(compRes.data);
           save('companies', compRes.data);
         }
-        if (usrRes.data && usrRes.data.length > 0) {
+        if (!usrRes.error && usrRes.data && usrRes.data.length > 0) {
           setUsers(usrRes.data);
           save('users', usrRes.data);
         }
-        if (ucRes.data && ucRes.data.length > 0) {
+        if (!ucRes.error && Array.isArray(ucRes.data)) {
           setUserCompanies(ucRes.data);
           save('userCompanies', ucRes.data);
         }
-        if (accRes.data && accRes.data.length > 0) {
+        if (!accRes.error && accRes.data && accRes.data.length > 0) {
           setAccounts(accRes.data);
           save('accounts', accRes.data);
         }
-        if (sigRes.data && sigRes.data.length > 0) {
+        if (!sigRes.error && Array.isArray(sigRes.data)) {
           setSignatories(sigRes.data);
           save('signatories', sigRes.data);
         }
-        if (ptyRes.data && ptyRes.data.length > 0) {
+        if (!ptyRes.error && ptyRes.data && ptyRes.data.length > 0) {
           setParties(ptyRes.data);
           save('parties', ptyRes.data);
         }
-        if (aliasRes.data && aliasRes.data.length > 0) {
+        if (!aliasRes.error && Array.isArray(aliasRes.data)) {
           setPartyAliases(aliasRes.data);
           save('partyAliases', aliasRes.data);
         }
-        if (tplRes.data && tplRes.data.length > 0) {
+        if (!tplRes.error && Array.isArray(tplRes.data)) {
           setPartyTemplates(tplRes.data);
           save('partyTemplates', tplRes.data);
         }
-        if (uTxnRes.data && uTxnRes.data.length > 0) {
+        if (!uTxnRes.error && Array.isArray(uTxnRes.data)) {
           setUserTransactions(uTxnRes.data);
           save('userTransactions', uTxnRes.data);
         }
-        if (bTxnRes.data && bTxnRes.data.length > 0) {
+        if (!bTxnRes.error && Array.isArray(bTxnRes.data)) {
           setBankTransactions(bTxnRes.data);
           save('bankTransactions', bTxnRes.data);
         }
-        if (linksRes.data && linksRes.data.length > 0) {
+        if (!linksRes.error && Array.isArray(linksRes.data)) {
           setTxnBankLinks(linksRes.data);
           save('txnBankLinks', linksRes.data);
         }
-        if (apprRes.data && apprRes.data.length > 0) {
+        if (!apprRes.error && Array.isArray(apprRes.data)) {
           setApprovals(apprRes.data);
           save('approvals', apprRes.data);
         }
-        if (cmtRes.data && cmtRes.data.length > 0) {
+        if (!cmtRes.error && Array.isArray(cmtRes.data)) {
           setComments(cmtRes.data);
           save('comments', cmtRes.data);
         }
-        if (pendRes.data && pendRes.data.length > 0) {
+        if (!pendRes.error && Array.isArray(pendRes.data)) {
           setPendingTransactions(pendRes.data);
           save('pendingTransactions', pendRes.data);
         }
-        if (stmtRes.data && stmtRes.data.length > 0) {
+        if (!stmtRes.error && Array.isArray(stmtRes.data)) {
           setStatementUploads(stmtRes.data);
           save('statementUploads', stmtRes.data);
         }
-        if (docRes.data && docRes.data.length > 0) {
+        if (!docRes.error && Array.isArray(docRes.data)) {
           setDocuments(docRes.data);
           save('documents', docRes.data);
         }
-        if (verRes.data && verRes.data.length > 0) {
+        if (!verRes.error && Array.isArray(verRes.data)) {
           setRecordVersions(verRes.data);
           save('recordVersions', verRes.data);
         }
-        if (setRes.data && setRes.data.length > 0) {
+        if (!setRes.error && setRes.data && setRes.data.length > 0) {
           setAppSettings(setRes.data);
           save('appSettings', setRes.data);
         }
-        if (resetRes.data && resetRes.data.length > 0) {
+        if (!resetRes.error && Array.isArray(resetRes.data)) {
           setPasswordResetRequests(resetRes.data as PasswordResetRequest[]);
           save('passwordResetRequests', resetRes.data);
         }
@@ -1812,11 +1812,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // Safeguard 3: Statement Uploads
-    const linkedUploads = statementUploads.filter(s => s.account_id === id);
+    const linkedUploads = statementUploads.filter(s => s.account_id === id && s.status === 'uploaded');
     if (linkedUploads.length > 0) {
       return {
         success: false,
-        error: `Cannot delete bank account "${existing.bank_name}" (${id}): It has ${linkedUploads.length} statement upload(s) registered.`,
+        error: `Cannot delete bank account "${existing.bank_name}" (${id}): It has ${linkedUploads.length} uploaded statement file(s) registered. Delete or archive uploaded files first.`,
       };
     }
 
@@ -1827,6 +1827,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       save('signatories', updatedSigs);
       if (supabase) {
         supabase.from('account_signatories').delete().eq('account_id', id).then(() => {});
+      }
+    }
+
+    // Remove placeholder/pending statement uploads for this account
+    const updatedUploads = statementUploads.filter(s => s.account_id !== id);
+    if (updatedUploads.length !== statementUploads.length) {
+      setStatementUploads(updatedUploads);
+      save('statementUploads', updatedUploads);
+      if (supabase) {
+        supabase.from('statement_uploads').delete().eq('account_id', id).then(() => {});
       }
     }
 
@@ -2416,9 +2426,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setPasswordResetRequests([]);
       save('passwordResetRequests', []);
 
-      // 2. Keep only the 6 official users
-      const coreUserIds = ['USR1', 'USR2', 'USR3', 'USR4', 'USR5', 'USR6'];
-      const cleanedUsers = users.filter(u => coreUserIds.includes(u.id)).map(u => ({ ...u, is_active: true }));
+      // 2. Keep only the 5 official users
+      const coreUserIds = ['USR1', 'USR2', 'USR3', 'USR4', 'USR5'];
+      const userMap = new Map<string, User>();
+      initialUsers.forEach(u => userMap.set(u.id, u));
+      users.filter(u => coreUserIds.includes(u.id)).forEach(u => userMap.set(u.id, { ...u, is_active: true }));
+      const cleanedUsers = Array.from(userMap.values()).sort((a, b) => a.id.localeCompare(b.id));
       setUsers(cleanedUsers);
       save('users', cleanedUsers);
 
