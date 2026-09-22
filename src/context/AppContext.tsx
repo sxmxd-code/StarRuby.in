@@ -1535,55 +1535,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: 'Please enter your official email address.' };
     }
 
-    if (supabase) {
-      try {
-        const { data, error } = await supabase.rpc('request_password_reset', { p_email: cleanEmail });
-        if (error) {
-          console.warn('request_password_reset RPC error:', error.message);
-        } else if (data) {
-          if (!data.success) {
-            return { success: false, error: data.error };
-          }
-          return {
-            success: true,
-            requestId: data.request_id,
-            resetCode: data.reset_code,
-            fullName: data.full_name,
-          };
-        }
-      } catch (err) {
-        console.warn('Reset request exception:', err);
-      }
-    }
-
-    // Local fallback for preview/offline
     const userFound = users.find(u => u.email.toLowerCase() === cleanEmail);
     if (!userFound) {
-      return { success: false, error: 'No active user account found with this email.' };
+      return { success: false, error: 'No active user account found with this email in treasury records.' };
     }
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
+
+    const newReqId = `REQ-${Date.now()}`;
     const newReq: PasswordResetRequest = {
-      id: `REQ-${Date.now()}`,
+      id: newReqId,
       email: cleanEmail,
       user_id: userFound.id,
-      reset_code: code,
+      reset_code: 'APPROVAL_FLOW',
       status: 'pending',
-      expires_at: new Date(Date.now() + 3600000).toISOString(),
+      expires_at: new Date(Date.now() + 86400000).toISOString(),
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
+
     const updated = [newReq, ...passwordResetRequests.filter(r => !(r.email.toLowerCase() === cleanEmail && r.status === 'pending'))];
     setPasswordResetRequests(updated);
     save('passwordResetRequests', updated);
 
     if (supabase) {
-      supabase.from('password_reset_requests').insert([newReq]).then(() => {});
+      supabase.from('password_reset_requests').insert([newReq]).then(({ error }) => {
+        if (error) console.warn('Supabase insert password reset request notice:', error.message);
+      });
     }
+
+    notifyRealtime(`Live Sync: Password reset requested by ${userFound.full_name} (${cleanEmail})`);
 
     return {
       success: true,
       requestId: newReq.id,
-      resetCode: code,
       fullName: userFound.full_name,
     };
   };
@@ -1596,27 +1579,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const req = passwordResetRequests.find(r => r.id === requestId);
     if (!req) return { success: false, error: 'Reset request not found.' };
 
+    const assignedPassword = tempPassword?.trim() || 'StarRuby@2026';
+    const userMatch = users.find(u => u.email.toLowerCase() === req.email.toLowerCase());
+    const roleLevel = userMatch ? (accessLevels.find(a => a.id === userMatch.access_level_id)?.level_type || 'Staff') : 'Staff';
+
+    // 1. Instantly update password in user_credentials with bcrypt
+    await setUserPassword(req.email.toLowerCase(), assignedPassword, roleLevel, userMatch?.full_name);
+
+    // 2. Call RPC if available
     if (supabase) {
       try {
-        const { data, error } = await supabase.rpc('approve_password_reset', {
+        await supabase.rpc('approve_password_reset', {
           p_request_id: requestId,
           p_admin_id: currentUser.id,
-          p_temporary_password: tempPassword || null,
+          p_temporary_password: assignedPassword,
         });
-        if (error) {
-          console.warn('approve_password_reset RPC error:', error.message);
-        }
       } catch (err) {
-        console.warn('approve_password_reset exception:', err);
+        console.warn('approve_password_reset RPC notice:', err);
       }
     }
 
+    // 3. Update local state
     const updated = passwordResetRequests.map(r => {
       if (r.id === requestId) {
         return {
           ...r,
           status: 'approved' as const,
-          temporary_password: tempPassword,
+          temporary_password: assignedPassword,
           approved_by: currentUser.id,
           updated_at: new Date().toISOString(),
         };
@@ -1626,15 +1615,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setPasswordResetRequests(updated);
     save('passwordResetRequests', updated);
 
+    // 4. Update Supabase table directly
     if (supabase) {
       supabase.from('password_reset_requests').update({
         status: 'approved',
-        temporary_password: tempPassword,
+        temporary_password: assignedPassword,
         approved_by: currentUser.id,
         updated_at: new Date().toISOString(),
       }).eq('id', requestId).then(() => {});
     }
 
+    notifyRealtime(`Live Sync: Password reset approved for ${req.email}`);
     return { success: true };
   };
 

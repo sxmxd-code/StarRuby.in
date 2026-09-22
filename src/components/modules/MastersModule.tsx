@@ -149,9 +149,6 @@ export const MastersModule: React.FC = () => {
 
   // Sub-view toggle for Users Tab: Active Team vs Password Reset Requests
   const [userTabMode, setUserTabMode] = useState<'users' | 'resets'>('users');
-  const [selectedResetReq, setSelectedResetReq] = useState<PasswordResetRequest | null>(null);
-  const [tempPasswordInput, setTempPasswordInput] = useState('');
-  const [showTempPassword, setShowTempPassword] = useState(false);
 
   // New Access Role dynamic sub-section
   const [newRoleLevelType, setNewRoleLevelType] = useState<AccessLevelType>('Staff');
@@ -319,16 +316,25 @@ export const MastersModule: React.FC = () => {
     }
   };
 
-  // Password Reset Approval Actions
+  // Password Reset Approval Actions (Pure Request & Approval Flow)
   const handleApproveResetRequest = async (req: PasswordResetRequest) => {
     if (currentRole !== 'Admin') return;
-    const generated = tempPasswordInput.trim() || `SR#${Math.floor(1000 + Math.random() * 9000)}!Reset`;
+    const customPassword = window.prompt(
+      `Approve Password Reset for ${req.email}\n\nEnter new password (or leave as default StarRuby@2026):`,
+      'StarRuby@2026'
+    );
+    if (customPassword === null) return; // User cancelled
+    const generated = customPassword.trim() || 'StarRuby@2026';
     const res = await approvePasswordReset(req.id, generated);
     if (res.success) {
-      navigator.clipboard.writeText(`StarRuby.in Temporary Password\nEmail: ${req.email}\nTemporary Password: ${generated}`);
-      setFeedback(`Password reset approved for ${req.email}. Temp password copied to clipboard!`);
-      setSelectedResetReq(null);
-      setTempPasswordInput('');
+      try {
+        await navigator.clipboard.writeText(
+          `StarRuby.in Banking Portal\nUser: ${req.email}\nNew Password: ${generated}`
+        );
+        setFeedback(`Password reset approved for ${req.email}. Credentials copied to clipboard!`);
+      } catch {
+        setFeedback(`Password reset approved for ${req.email}. New password: ${generated}`);
+      }
     } else {
       alert(res.error || 'Failed to approve reset.');
     }
@@ -936,7 +942,7 @@ export const MastersModule: React.FC = () => {
                 <div className="flex items-center space-x-2">
                   <Shield className="w-4 h-4 text-rose-700 shrink-0" />
                   <span>
-                    When team members request a password reset on the login page, their requests arrive here in realtime. You can approve with a generated temporary password.
+                    When team members submit a password reset request from the login page, their requests arrive here in realtime. Click <strong>Approve & Set Password</strong> to assign their new password and activate their account.
                   </span>
                 </div>
                 <span className="font-mono text-[11px] font-bold text-rose-800 bg-rose-200/80 px-2 py-0.5 rounded shrink-0">
@@ -954,10 +960,9 @@ export const MastersModule: React.FC = () => {
                     <thead>
                       <tr className="bg-slate-50 border-b border-slate-200 font-bold uppercase tracking-wider text-[10px] text-slate-500">
                         <th className="py-2.5 px-3">User / Email</th>
-                        <th className="py-2.5 px-3">6-Digit Code</th>
                         <th className="py-2.5 px-3">Status</th>
                         <th className="py-2.5 px-3">Requested Time</th>
-                        <th className="py-2.5 px-3">Temporary Credentials</th>
+                        <th className="py-2.5 px-3">Assigned Password</th>
                         <th className="py-2.5 px-3 text-right">Admin Actions</th>
                       </tr>
                     </thead>
@@ -971,11 +976,6 @@ export const MastersModule: React.FC = () => {
                             <td className="py-3 px-3">
                               <div className="font-bold text-slate-900">{userMatch ? userMatch.full_name : req.email}</div>
                               <div className="text-[11px] text-slate-500">{req.email}</div>
-                            </td>
-                            <td className="py-3 px-3">
-                              <span className="font-mono font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded text-[11px]">
-                                {req.reset_code}
-                              </span>
                             </td>
                             <td className="py-3 px-3">
                               <span
@@ -1006,10 +1006,10 @@ export const MastersModule: React.FC = () => {
                                     type="button"
                                     onClick={() => {
                                       navigator.clipboard.writeText(req.temporary_password || '');
-                                      alert('Copied temporary password to clipboard!');
+                                      alert('Copied password to clipboard!');
                                     }}
                                     className="text-slate-400 hover:text-slate-700 p-0.5 cursor-pointer"
-                                    title="Copy temporary password"
+                                    title="Copy password"
                                   >
                                     <Copy className="w-3 h-3" />
                                   </button>
@@ -1025,10 +1025,10 @@ export const MastersModule: React.FC = () => {
                                     type="button"
                                     onClick={() => handleApproveResetRequest(req)}
                                     className="px-2.5 py-1 bg-emerald-700 hover:bg-emerald-800 text-white rounded text-[11px] font-bold transition flex items-center space-x-1 cursor-pointer"
-                                    title="Approve and generate temporary password"
+                                    title="Approve and assign password"
                                   >
                                     <Check className="w-3 h-3" />
-                                    <span>Approve & Set Temp</span>
+                                    <span>Approve & Set Password</span>
                                   </button>
                                   <button
                                     type="button"
