@@ -1,4 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { createPortal } from 'react-dom';
+import { useBodyScrollLock } from '../../hooks/useBodyScrollLock';
 import { useApp } from '../../context/AppContext';
 import {
   parseDelimitedText,
@@ -88,6 +90,20 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
       setTargetAccountId(availableAccounts[0].id);
     }
   }, [selectedAccountId, availableAccounts, targetAccountId]);
+
+  // Freeze background scrolling when modal is active
+  useBodyScrollLock(isOpen);
+
+  // Close on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isOpen) {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   const currentAccount = accounts.find(a => a.id === targetAccountId) || availableAccounts[0];
 
@@ -402,9 +418,18 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-150">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-5xl w-full max-h-[92vh] flex flex-col border border-slate-200 overflow-hidden">
+  if (!isOpen) return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-6 overflow-hidden">
+      {/* Clean dark backdrop without blur to focus 100% on the active modal */}
+      <div
+        className="fixed inset-0 bg-slate-950/75 transition-opacity"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+
+      <div className="relative bg-white rounded-2xl shadow-2xl max-w-5xl w-full max-h-[90vh] flex flex-col border border-slate-200 overflow-hidden z-10 animate-in fade-in zoom-in-95 duration-150">
         
         {/* Header */}
         <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/80">
@@ -932,6 +957,7 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
         </div>
 
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

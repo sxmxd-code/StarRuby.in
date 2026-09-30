@@ -58,7 +58,7 @@ export const Header: React.FC<HeaderProps> = ({
   const RoleIcon = roleCfg.icon;
 
   return (
-    <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200/90 shadow-xs text-slate-900">
+    <header className="sticky top-0 z-40 bg-white border-b border-slate-200 shadow-xs text-slate-900">
       {/* Top Thin Ruby Line */}
       <div className="h-1 bg-gradient-to-r from-rose-700 via-rose-600 to-amber-500 w-full" />
 

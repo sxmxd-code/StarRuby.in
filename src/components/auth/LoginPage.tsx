@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useApp } from '../../context/AppContext';
 import { Lock, Mail, Eye, EyeOff, Shield, ArrowRight, Key, X, Check, AlertCircle } from 'lucide-react';
+import { useBodyScrollLock } from '../../hooks/useBodyScrollLock';
 
 export const LoginPage: React.FC = () => {
   const { login, requestPasswordReset } = useApp();
@@ -18,6 +20,20 @@ export const LoginPage: React.FC = () => {
   const [forgotErrorMsg, setForgotErrorMsg] = useState<string | null>(null);
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [submittedUserName, setSubmittedUserName] = useState<string | null>(null);
+
+  // Lock scrolling when forgot password modal is open
+  useBodyScrollLock(isForgotModalOpen);
+
+  // Close modal on Escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isForgotModalOpen) {
+        setIsForgotModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isForgotModalOpen]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -179,7 +195,7 @@ export const LoginPage: React.FC = () => {
       {/* ========================================================================= */}
       {/* CLEAN CORPORATE LOGIN CARD (NO CLUTTER, NO FLUFF)                         */}
       {/* ========================================================================= */}
-      <div className="w-full max-w-[390px] bg-white/95 backdrop-blur-md border border-slate-200/90 rounded-2xl shadow-xl shadow-slate-900/5 p-7 sm:p-8 z-10 transition-all">
+      <div className="w-full max-w-[390px] bg-white border border-slate-200 rounded-2xl shadow-xl shadow-slate-900/5 p-7 sm:p-8 z-10 transition-all">
         
         {/* Brand Banner */}
         <div className="text-center pb-5 border-b border-slate-100">
@@ -289,9 +305,15 @@ export const LoginPage: React.FC = () => {
       {/* ========================================================================= */}
       {/* PASSWORD RECOVERY & RESET MODAL                                          */}
       {/* ========================================================================= */}
-      {isForgotModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 select-text">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-100 w-full max-w-md p-6 space-y-4 relative animate-in fade-in zoom-in-95 duration-200">
+      {isForgotModalOpen && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 select-text overflow-hidden">
+          {/* Crisp Solid Scrim Backdrop (No blur) */}
+          <div
+            className="fixed inset-0 bg-slate-950/75 transition-opacity"
+            onClick={() => setIsForgotModalOpen(false)}
+            aria-hidden="true"
+          />
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-100 w-full max-w-md p-6 space-y-4 relative z-10 animate-in fade-in zoom-in-95 duration-200">
             {/* Close Button */}
             <button
               type="button"
@@ -401,7 +423,8 @@ export const LoginPage: React.FC = () => {
               </div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
     </div>

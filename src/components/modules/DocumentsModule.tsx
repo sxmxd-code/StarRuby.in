@@ -1,9 +1,11 @@
 import React, { useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useApp } from '../../context/AppContext';
 import { uploadToR2 } from '../../lib/storage';
 import { extractDocumentMetadataAI, ExtractedInvoiceData, isGeminiConfigured } from '../../lib/gemini';
 import { FileText, Search, Upload, Paperclip, Sparkles, ExternalLink, Trash2, Bot, Check, X, Loader2, RefreshCw } from 'lucide-react';
 import { DocumentRecord } from '../../types/database';
+import { useBodyScrollLock } from '../../hooks/useBodyScrollLock';
 
 export const DocumentsModule: React.FC = () => {
   const { documents, attachDocument, deleteDocument, syncWithCloudflareR2, userTransactions } = useApp();
@@ -20,6 +22,9 @@ export const DocumentsModule: React.FC = () => {
   const [analyzingDoc, setAnalyzingDoc] = useState<DocumentRecord | null>(null);
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [aiResult, setAiResult] = useState<ExtractedInvoiceData | null>(null);
+
+  // Lock scrolling when AI modal is open
+  useBodyScrollLock(Boolean(analyzingDoc));
 
   const handleAnalyzeDocument = async (doc: DocumentRecord) => {
     setAnalyzingDoc(doc);
@@ -258,9 +263,15 @@ export const DocumentsModule: React.FC = () => {
       </div>
 
       {/* AI Analysis Modal */}
-      {analyzingDoc && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-2xl border border-purple-200 space-y-5">
+      {analyzingDoc && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-6 overflow-hidden">
+          {/* Crisp Solid Scrim Backdrop (No blur) */}
+          <div
+            className="fixed inset-0 bg-slate-950/75 transition-opacity"
+            onClick={() => setAnalyzingDoc(null)}
+            aria-hidden="true"
+          />
+          <div className="relative bg-white rounded-2xl max-w-xl w-full p-6 shadow-2xl border border-purple-200 space-y-5 z-10 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between border-b pb-3">
               <div className="flex items-center space-x-2">
                 <div className="p-2 bg-purple-100 rounded-xl">
@@ -358,7 +369,8 @@ export const DocumentsModule: React.FC = () => {
               </div>
             ) : null}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
     </div>

@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Trash2 } from 'lucide-react';
+import { useBodyScrollLock } from '../../hooks/useBodyScrollLock';
 
 interface SlideOverDrawerProps {
   isOpen: boolean;
@@ -41,6 +43,9 @@ export const SlideOverDrawer: React.FC<SlideOverDrawerProps> = ({
   const [isRendered, setIsRendered] = useState(isOpen);
   const [isAnimating, setIsAnimating] = useState(false);
 
+  // Lock body & main scrolling while drawer is open
+  useBodyScrollLock(isOpen);
+
   useEffect(() => {
     if (isOpen) {
       setIsRendered(true);
@@ -72,21 +77,21 @@ export const SlideOverDrawer: React.FC<SlideOverDrawerProps> = ({
 
   const resolvedWidth = WIDTH_CLASS_MAP[widthClass] || 'sm:max-w-xl';
 
-  return (
-    <div className="fixed inset-0 z-50 overflow-hidden">
-      {/* Backdrop: Clean, clear, NO blur, subtle tint so background stays 100% sharp and visible */}
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] overflow-hidden">
+      {/* Backdrop: Clean, focused, solid dark overlay (NO smudgy blur), locks focus on drawer with zero background activity */}
       <div
-        className={`fixed inset-0 bg-slate-900/10 transition-opacity duration-200 ease-out ${
+        className={`fixed inset-0 bg-slate-950/65 transition-opacity duration-200 ease-out ${
           isAnimating ? 'opacity-100' : 'opacity-0'
         }`}
         onClick={onClose}
         aria-hidden="true"
       />
 
-      {/* Drawer Container (Pinned strictly to the Right Edge) */}
-      <div className="fixed inset-y-0 right-0 max-w-full flex pointer-events-none h-full">
+      {/* Drawer Container (Pinned strictly to the Right Edge of viewport) */}
+      <div className="fixed inset-y-0 right-0 max-w-full flex pointer-events-none h-full z-10">
         <div
-          className={`w-full ${resolvedWidth} bg-white shadow-[-8px_0_30px_rgba(0,0,0,0.14)] border-l border-slate-200 flex flex-col h-full pointer-events-auto transform transition-transform duration-250 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+          className={`w-full ${resolvedWidth} bg-white shadow-[-8px_0_35px_rgba(0,0,0,0.28)] border-l border-slate-200 flex flex-col h-full pointer-events-auto transform transition-transform duration-250 ease-[cubic-bezier(0.16,1,0.3,1)] ${
             isAnimating ? 'translate-x-0' : 'translate-x-full'
           }`}
         >
@@ -166,6 +171,7 @@ export const SlideOverDrawer: React.FC<SlideOverDrawerProps> = ({
           </form>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

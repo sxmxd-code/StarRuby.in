@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useApp } from '../../context/AppContext';
 import { uploadToR2, getR2DownloadUrl } from '../../lib/storage';
 import { CalendarCheck, Upload, FileText, CheckCircle2, AlertCircle, Download, RefreshCw, X, HardDrive, Trash2 } from 'lucide-react';
 import { StatementUpload, User } from '../../types/database';
 import { formatDisplayDateTime } from '../../lib/formatters';
+import { useBodyScrollLock } from '../../hooks/useBodyScrollLock';
 
 export const StatementUploadsModule: React.FC = () => {
   const {
@@ -22,6 +24,20 @@ export const StatementUploadsModule: React.FC = () => {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+
+  // Lock scrolling when modal is open
+  useBodyScrollLock(Boolean(selectedCell));
+
+  // Close on Escape key press
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && selectedCell) {
+        setSelectedCell(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedCell]);
 
   const months = [
     { label: 'Jan', value: '2026-01-01' },
@@ -251,9 +267,15 @@ export const StatementUploadsModule: React.FC = () => {
       </div>
 
       {/* Detail / Upload Modal */}
-      {selectedCell && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
-          <div className="bg-white rounded-2xl shadow-2xl p-4 sm:p-6 max-w-md w-full space-y-4 sm:space-y-5 border border-slate-100 animate-in fade-in zoom-in-95 duration-150">
+      {selectedCell && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 overflow-hidden">
+          {/* Crisp Solid Scrim Backdrop (No blur) */}
+          <div
+            className="fixed inset-0 bg-slate-950/75 transition-opacity"
+            onClick={() => setSelectedCell(null)}
+            aria-hidden="true"
+          />
+          <div className="relative bg-white rounded-2xl shadow-2xl p-4 sm:p-6 max-w-md w-full space-y-4 sm:space-y-5 border border-slate-100 z-10 animate-in fade-in zoom-in-95 duration-150">
             
             <div className="flex items-start justify-between">
               <div>
@@ -378,7 +400,8 @@ export const StatementUploadsModule: React.FC = () => {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
     </div>

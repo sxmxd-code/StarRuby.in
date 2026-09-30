@@ -1,4 +1,6 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { createPortal } from 'react-dom';
+import { useBodyScrollLock } from '../../hooks/useBodyScrollLock';
 import { useApp } from '../../context/AppContext';
 import { UserTransaction, BankTransaction } from '../../types/database';
 import { uploadToR2, getR2DownloadUrl } from '../../lib/storage';
@@ -58,6 +60,20 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
   const [isUploading, setIsUploading] = useState(false);
   const [approvalFeedback, setApprovalFeedback] = useState<string | null>(null);
   const [approvalComment, setApprovalComment] = useState('');
+
+  // Lock body & main scrolling while board modal is open
+  useBodyScrollLock(true);
+
+  // Close on Escape key press
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
 
   // Find Account & Company
   const account = accounts.find(a => a.id === transaction.account_id);
@@ -142,9 +158,16 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
     setTimeout(() => setApprovalFeedback(null), 4000);
   };
 
-  return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4">
-      <div className="relative bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-5xl overflow-hidden max-h-[96vh] sm:max-h-[92vh] flex flex-col">
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-6 overflow-hidden">
+      {/* Crisp Solid Scrim Backdrop (No blur, locks focus onto the modal) */}
+      <div
+        className="fixed inset-0 bg-slate-950/75 transition-opacity"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+
+      <div className="relative bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-5xl overflow-hidden max-h-[92vh] flex flex-col z-10 animate-in fade-in zoom-in-95 duration-150">
         
         {/* Top Header Banner */}
         <div className="bg-gradient-to-r from-rose-50/90 via-white to-slate-50 text-slate-900 p-3.5 sm:p-5 border-b border-slate-200/90 flex items-start sm:items-center justify-between gap-2">
@@ -600,6 +623,7 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
         </div>
 
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

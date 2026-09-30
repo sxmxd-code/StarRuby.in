@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useApp } from '../../context/AppContext';
+import { useBodyScrollLock } from '../../hooks/useBodyScrollLock';
 import {
   LayoutDashboard,
   Building,
@@ -55,6 +57,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const [isRenderedMobile, setIsRenderedMobile] = useState(isOpenMobile);
   const [isAnimatingMobile, setIsAnimatingMobile] = useState(false);
+
+  // Lock body scroll when mobile navigation drawer is open
+  useBodyScrollLock(isOpenMobile);
 
   useEffect(() => {
     if (isOpenMobile) {
@@ -257,11 +262,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </aside>
 
       {/* Mobile / Tablet Off-Canvas Sliding Drawer */}
-      {isRenderedMobile && (
-        <div className="fixed inset-0 z-50 lg:hidden flex">
-          {/* Backdrop blur overlay with smooth fade */}
+      {isRenderedMobile && createPortal(
+        <div className="fixed inset-0 z-[9999] lg:hidden flex overflow-hidden">
+          {/* Crisp solid backdrop with smooth fade (no blur) */}
           <div
-            className={`fixed inset-0 bg-slate-900/50 backdrop-blur-xs transition-opacity duration-250 ease-out ${
+            className={`fixed inset-0 bg-slate-950/65 transition-opacity duration-250 ease-out ${
               isAnimatingMobile ? 'opacity-100' : 'opacity-0'
             }`}
             onClick={onCloseMobile}
@@ -293,7 +298,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
             {renderNavContent()}
           </aside>
-        </div>
+        </div>,
+        document.body
       )}
     </>
   );
