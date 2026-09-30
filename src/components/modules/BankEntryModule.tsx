@@ -17,7 +17,9 @@ import {
   ShieldAlert,
   Sparkles,
   Filter,
+  Upload,
 } from 'lucide-react';
+import { UniversalImportModal } from './UniversalImportModal';
 
 export const BankEntryModule: React.FC = () => {
   const {
@@ -82,6 +84,7 @@ export const BankEntryModule: React.FC = () => {
   const [referenceNo, setReferenceNo] = useState('');
   const [balanceAfter, setBalanceAfter] = useState('');
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [showImportModal, setShowImportModal] = useState(false);
 
   // --------------------------------------------------------------------------
   // LIVE PARTY NARRATION AUTO-DETECTION
@@ -218,7 +221,7 @@ export const BankEntryModule: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center space-x-3">
           <span className="p-2 bg-blue-50 text-blue-700 rounded-lg">
             <Landmark className="w-5 h-5" />
@@ -230,6 +233,15 @@ export const BankEntryModule: React.FC = () => {
             </p>
           </div>
         </div>
+
+        <button
+          onClick={() => setShowImportModal(true)}
+          className="flex items-center space-x-2 px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0"
+          title="Bulk import bank statement lines from CSV, Google Sheets, or PDF"
+        >
+          <Upload className="w-4 h-4" />
+          <span>Bulk Import (CSV / Sheets / PDF)</span>
+        </button>
       </div>
 
       {feedback && (
@@ -626,6 +638,18 @@ export const BankEntryModule: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Universal Bulk Ingestion Modal (CSV, Google Sheets, PDF) */}
+      <UniversalImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        mode="bank"
+        selectedAccountId={selectedAccountId}
+        onSuccess={(count) => {
+          setFeedback(`Successfully imported ${count} bank statement transactions.`);
+          setTimeout(() => setFeedback(null), 5000);
+        }}
+      />
     </div>
   );
 };

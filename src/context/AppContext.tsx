@@ -122,6 +122,7 @@ interface AppContextType {
   updateUserTransactionCell: (id: string, column: keyof UserTransaction, value: any) => void;
   
   addBankTransaction: (txn: Omit<BankTransaction, 'id' | 'created_by' | 'created_at' | 'updated_at'>) => BankTransaction;
+  addBankTransactionsBatch: (txns: Omit<BankTransaction, 'id' | 'created_by' | 'created_at' | 'updated_at'>[]) => BankTransaction[];
   deleteBankTransaction: (id: string, reason: string) => boolean;
   deleteBankTransactionsBatch: (txnIds: string[]) => void;
   
@@ -1186,6 +1187,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     return newTxn;
+  };
+
+  const addBankTransactionsBatch = (
+    txnsData: Array<Omit<BankTransaction, 'id' | 'created_by' | 'created_at' | 'updated_at'>>
+  ): BankTransaction[] => {
+    let currentMax = bankTransactions.reduce((acc, t) => {
+      const num = parseInt(t.id.replace(/\D/g, ''), 10);
+      return isNaN(num) ? acc : Math.max(acc, num);
+    }, 100);
+
+    const now = new Date().toISOString();
+    const newTxns: BankTransaction[] = [];
+
+    for (const data of txnsData) {
+      currentMax++;
+      const newId = `BTRN${currentMax}`;
+
+      // Auto-resolve party from narration if not provided
+      let resolvedPartyId = data.party_id;
+      if (!resolvedPartyId && data.narration) {
+        const match = resolvePartyFromNarration(data.narration, parties, partyAliases);
+        if (match.party) {
+          resolvedPartyId = match.party.id;
+        }
+      }
+
+      newTxns.push({
+        ...data,
+        id: newId,
+        party_id: resolvedPartyId,
+        created_by: currentUser.id,
+        created_at: now,
+        updated_at: now,
+      });
+    }
+
+    const updated = [...newTxns, ...bankTransactions];
+    setBankTransactions(updated);
+    save('bankTransactions', updated);
+
+    if (supabase && newTxns.length > 0) {
+      supabase.from('transactions_bank').insert(newTxns).then(({ error }) => {
+        if (error) console.warn('Supabase batch insert bank transactions error:', error.message);
+      });
+    }
+
+    notifyRealtime(`Live Sync: Imported ${newTxns.length} bank statement transactions`);
+    return newTxns;
   };
 
   const deleteBankTransaction = (id: string, reason: string): boolean => {
@@ -3049,6 +3098,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteUserTransactionsBatch,
         updateUserTransactionCell,
         addBankTransaction,
+        addBankTransactionsBatch,
         deleteBankTransaction,
         deleteBankTransactionsBatch,
         linkTxnBank,

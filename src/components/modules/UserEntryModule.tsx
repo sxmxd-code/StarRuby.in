@@ -31,6 +31,7 @@ import {
   Paperclip,
 } from 'lucide-react';
 import { TransactionBoardModal } from './TransactionBoardModal';
+import { UniversalImportModal } from './UniversalImportModal';
 
 export const UserEntryModule: React.FC = () => {
   const {
@@ -506,153 +507,9 @@ export const UserEntryModule: React.FC = () => {
   const [selectedBoardTxn, setSelectedBoardTxn] = useState<UserTransaction | null>(null);
 
   // --------------------------------------------------------------------------
-  // CSV BATCH UPLOAD & SAMPLE DOWNLOAD
+  // UNIVERSAL BULK INGESTION MODAL (CSV, GOOGLE SHEETS, PDF)
   // --------------------------------------------------------------------------
-  const [showCsvModal, setShowCsvModal] = useState(false);
-  const [csvPreviewRows, setCsvPreviewRows] = useState<any[]>([]);
-
-  const handleDownloadSampleCsv = () => {
-    const csvContent = [
-      'Account_ID,Party_System_Name,Date,Amount,Confirmed_Status,Direction,Exchange_Rate,Description',
-      'BNK1,Bangkok Gems & Stones Co.,2026-09-12,35000,Confirmed,Payment,1.0,Payment for sapphire rough lot',
-      'BNK3,Blue Ocean Trading LLC,2026-09-13,82000,Unconfirmed,Payment,26.05,Prepayment invoice 4092',
-      'BNK1,Raw Gem Importer,2026-09-14,15000,Confirmed,Receipt,1.0,Advance deposit for rubies',
-    ].join('\n');
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', 'StarRuby_User_Transactions_Template.csv');
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  // Quoted-comma aware CSV line parser function
-  const parseCsvLine = (line: string): string[] => {
-    const values: string[] = [];
-    let currentValue = '';
-    let insideQuotes = false;
-
-    for (let i = 0; i < line.length; i++) {
-      const char = line[i];
-      if (char === '"') {
-        if (insideQuotes && line[i + 1] === '"') {
-          currentValue += '"';
-          i++;
-        } else {
-          insideQuotes = !insideQuotes;
-        }
-      } else if (char === ',' && !insideQuotes) {
-        values.push(currentValue.trim().replace(/^["']|["']$/g, ''));
-        currentValue = '';
-      } else {
-        currentValue += char;
-      }
-    }
-    values.push(currentValue.trim().replace(/^["']|["']$/g, ''));
-    return values;
-  };
-
-  const handleCsvFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const text = event.target?.result as string;
-      if (!text) return;
-
-      const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
-      if (lines.length < 2) {
-        alert('CSV file must have a header row and at least one data row.');
-        return;
-      }
-
-      const rows: any[] = [];
-      // Skip header row
-      for (let i = 1; i < lines.length; i++) {
-        const cols = parseCsvLine(lines[i]);
-        if (cols.length < 5) continue;
-
-        const [accId, partyName, date, amtStr, confirmedStr, dirStr, rateStr, descStr] = cols;
-        const numAmt = parseFloat(amtStr);
-        const userAllowedAccounts = accounts.filter(a => allowedCompanies.some(c => c.id === a.company_id));
-        const validAcc = userAllowedAccounts.some(a => a.id === accId);
-        const validAmt = !isNaN(numAmt) && numAmt > 0;
-        const validDate = /^\d{4}-\d{2}-\d{2}$/.test(date);
-        const validConfirmed = confirmedStr === 'Confirmed' || confirmedStr === 'Unconfirmed';
-        const validDir = dirStr === 'Payment' || dirStr === 'Receipt';
-
-        const isValid = validAcc && validAmt && validDate && validConfirmed && validDir;
-        let errorMsg = '';
-        if (!validAcc) errorMsg = `Invalid or out-of-scope Account ID (${accId}); `;
-        if (!validAmt) errorMsg += 'Amount must be > 0; ';
-        if (!validDate) errorMsg += 'Date must be YYYY-MM-DD; ';
-        if (!validConfirmed) errorMsg += 'Status must be Confirmed/Unconfirmed; ';
-        if (!validDir) errorMsg += 'Direction must be Payment/Receipt; ';
-
-        rows.push({
-          account_id: accId,
-          party_name: partyName || '',
-          date,
-          amount: numAmt,
-          amount_confirmed: validConfirmed ? confirmedStr : 'Confirmed',
-          direction: validDir ? dirStr : 'Payment',
-          exchange_rate: parseFloat(rateStr) || undefined,
-          description: descStr || '',
-          valid: isValid,
-          error: errorMsg.trim() || undefined,
-        });
-      }
-      setCsvPreviewRows(rows);
-    };
-    reader.readAsText(file);
-  };
-
-  const executeCsvImport = () => {
-    const validRows = csvPreviewRows.filter(r => r.valid);
-    if (validRows.length === 0) return;
-
-    const toImport = validRows.map(row => {
-      const acc = accounts.find(a => a.id === row.account_id);
-      const curr = acc?.account_currency || 'INR';
-      const rate = row.exchange_rate;
-      const inr = rate && rate > 0 ? Number((row.amount * rate).toFixed(2)) : undefined;
-
-      // Auto-match party if exists (defensively check row.party_name && row.party_name.toLowerCase())
-      const rowPartyName = (row.party_name && typeof row.party_name === 'string') ? row.party_name.trim() : '';
-      const rowPartyLower = rowPartyName ? rowPartyName.toLowerCase() : '';
-      const matchedParty = rowPartyLower ? parties.find(
-        p => (p.system_name && p.system_name.toLowerCase() === rowPartyLower) ||
-             (p.party_name && p.party_name.toLowerCase() === rowPartyLower)
-      ) : undefined;
-
-      return {
-        account_id: row.account_id,
-        party_id: matchedParty?.id,
-        party_name_raw: rowPartyName,
-        date_of_transaction: row.date,
-        currency: curr,
-        amount: row.amount,
-        amount_confirmed: row.amount_confirmed as 'Confirmed' | 'Unconfirmed',
-        direction: row.direction as 'Payment' | 'Receipt',
-        exchange_rate: rate,
-        amount_in_inr: inr,
-        description: row.description || undefined,
-        verified_with_bank: 'No' as const,
-        source: 'csv' as const,
-      };
-    });
-
-    const created = addUserTransactionsBatch(toImport);
-
-    setShowCsvModal(false);
-    setCsvPreviewRows([]);
-    setFormFeedback(`Successfully imported ${created.length} transactions from CSV.`);
-    setTimeout(() => setFormFeedback(null), 4000);
-  };
+  const [showImportModal, setShowImportModal] = useState(false);
 
   return (
     <div className="space-y-6">
@@ -687,20 +544,12 @@ export const UserEntryModule: React.FC = () => {
 
         <div className="flex items-center space-x-2.5 flex-wrap">
           <button
-            onClick={handleDownloadSampleCsv}
-            className="flex items-center space-x-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-semibold transition cursor-pointer"
-            title="Download formatted CSV template with sample data"
-          >
-            <Download className="w-3.5 h-3.5 text-slate-600" />
-            <span>Download Sample CSV</span>
-          </button>
-
-          <button
-            onClick={() => setShowCsvModal(true)}
-            className="flex items-center space-x-1.5 px-3.5 py-2 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-semibold transition shadow-xs cursor-pointer"
+            onClick={() => setShowImportModal(true)}
+            className="flex items-center space-x-2 px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer"
+            title="Bulk import user transactions from CSV, Google Sheets, or PDF"
           >
             <Upload className="w-3.5 h-3.5 text-white" />
-            <span>Upload Batch CSV</span>
+            <span>Bulk Import (CSV / Sheets / PDF)</span>
           </button>
         </div>
       </div>
@@ -1780,103 +1629,18 @@ export const UserEntryModule: React.FC = () => {
       </SlideOverDrawer>
 
       {/* ==================================================================== */}
-      {/* CSV BATCH UPLOAD MODAL                                               */}
+      {/* UNIVERSAL BULK INGESTION MODAL (CSV, GOOGLE SHEETS, PDF)             */}
       {/* ==================================================================== */}
-      {showCsvModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full p-6 space-y-4">
-            <div className="flex items-center justify-between border-b pb-3">
-              <div>
-                <h3 className="text-base font-bold font-serif text-slate-900">Upload User Transactions CSV</h3>
-                <p className="text-xs text-slate-500">
-                  Import multiple entries at once using the standard StarRuby CSV template.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowCsvModal(false)}
-                className="text-slate-400 hover:text-slate-600"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-5 border-2 border-dashed border-slate-300 rounded-xl text-center bg-slate-50 space-y-2">
-              <input
-                type="file"
-                accept=".csv"
-                onChange={handleCsvFileUpload}
-                className="text-xs text-slate-700 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-rose-50 file:text-rose-700 hover:file:bg-rose-100"
-              />
-              <p className="text-[11px] text-slate-400">
-                Supports CSV files with columns: Account_ID, Party_System_Name, Date, Amount, Confirmed_Status, Direction, Exchange_Rate, Description
-              </p>
-            </div>
-
-            {csvPreviewRows.length > 0 && (
-              <div className="border rounded-xl overflow-hidden text-xs max-h-52 overflow-y-auto">
-                <table className="w-full text-left">
-                  <thead className="bg-slate-100 font-bold text-slate-700">
-                    <tr>
-                      <th className="p-2">Account</th>
-                      <th className="p-2">Party</th>
-                      <th className="p-2">Date</th>
-                      <th className="p-2 text-right">Amount</th>
-                      <th className="p-2 text-center">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {csvPreviewRows.map((r, idx) => (
-                      <tr key={idx} className={r.valid ? 'bg-emerald-50/40' : 'bg-rose-50/40'}>
-                        <td className="p-2 font-mono">{r.account_id}</td>
-                        <td className="p-2 font-semibold text-slate-800">{r.party_name}</td>
-                        <td className="p-2">{r.date}</td>
-                        <td className="p-2 text-right font-mono font-bold">{r.amount}</td>
-                        <td className="p-2 text-center">
-                          {r.valid ? (
-                            <span className="text-emerald-700 font-bold bg-emerald-100 px-2 py-0.5 rounded text-[10px]">Valid</span>
-                          ) : (
-                            <span className="text-rose-700 font-bold bg-rose-100 px-2 py-0.5 rounded text-[10px]">{r.error}</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            <div className="flex items-center justify-between pt-3 border-t">
-              <button
-                type="button"
-                onClick={handleDownloadSampleCsv}
-                className="text-xs text-rose-700 font-semibold hover:underline flex items-center space-x-1"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Download Sample Template</span>
-              </button>
-
-              <div className="flex space-x-2.5">
-                <button
-                  type="button"
-                  onClick={() => setShowCsvModal(false)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={executeCsvImport}
-                  disabled={csvPreviewRows.filter(r => r.valid).length === 0}
-                  className="px-4 py-2 bg-rose-700 hover:bg-rose-800 disabled:opacity-50 text-white rounded-lg text-xs font-bold shadow-xs cursor-pointer"
-                >
-                  Import {csvPreviewRows.filter(r => r.valid).length} Valid Entries
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <UniversalImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        mode="user"
+        selectedAccountId={selectedAccountId}
+        onSuccess={(count) => {
+          setFormFeedback(`Successfully imported ${count} user transactions.`);
+          setTimeout(() => setFormFeedback(null), 5000);
+        }}
+      />
 
       {/* ==================================================================== */}
       {/* TRANSACTION BOARD MODAL                                              */}
