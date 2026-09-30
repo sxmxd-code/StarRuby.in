@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { uploadToR2, getR2DownloadUrl } from '../../lib/storage';
-import { CalendarCheck, Upload, FileText, CheckCircle2, AlertCircle, Download, RefreshCw, X, HardDrive } from 'lucide-react';
+import { CalendarCheck, Upload, FileText, CheckCircle2, AlertCircle, Download, RefreshCw, X, HardDrive, Trash2 } from 'lucide-react';
 import { StatementUpload, User } from '../../types/database';
 import { formatDisplayDateTime } from '../../lib/formatters';
 
@@ -10,6 +10,8 @@ export const StatementUploadsModule: React.FC = () => {
     scopedAccounts,
     scopedStatementUploads,
     uploadStatementFile,
+    deleteStatementUpload,
+    syncWithCloudflareR2,
     allUsers,
     accessLevels,
   } = useApp();
@@ -17,6 +19,8 @@ export const StatementUploadsModule: React.FC = () => {
   const [selectedCell, setSelectedCell] = useState<{ accountId: string; month: string } | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
 
   const months = [
@@ -83,6 +87,43 @@ export const StatementUploadsModule: React.FC = () => {
     }
   };
 
+  const handleSyncR2 = async () => {
+    setIsSyncing(true);
+    try {
+      const res = await syncWithCloudflareR2();
+      setFeedback(`Cloudflare R2 Synced: ${res.verified} files active in storage. ${res.removed > 0 ? `${res.removed} missing/orphaned statements reset to red.` : 'All statements verified in sync!'}`);
+      setTimeout(() => setFeedback(null), 5000);
+    } catch (err) {
+      console.error('R2 Sync error:', err);
+      alert('Failed to sync with Cloudflare R2.');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleDeleteStatement = async () => {
+    if (!selectedCell) return;
+    if (!window.confirm(`Are you sure you want to permanently delete this statement file from Cloudflare R2? This will remove the file from storage, remove it from Documents, and immediately reset this grid cell to Missing (Red).`)) {
+      return;
+    }
+    setIsDeleting(true);
+    try {
+      const ok = await deleteStatementUpload(selectedCell.accountId, selectedCell.month);
+      if (ok) {
+        setFeedback(`Statement for ${selectedCell.accountId} (${selectedCell.month.slice(0, 7)}) deleted from Cloudflare R2 and grid reset to missing.`);
+        setSelectedCell(null);
+        setTimeout(() => setFeedback(null), 4000);
+      } else {
+        alert('Failed to delete statement file from Cloudflare R2.');
+      }
+    } catch (err) {
+      console.error('Delete statement error:', err);
+      alert('Error deleting file.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const activeRecord = selectedCell
     ? scopedStatementUploads.find(s => s.account_id === selectedCell.accountId && s.statement_month === selectedCell.month)
     : null;
@@ -113,6 +154,16 @@ export const StatementUploadsModule: React.FC = () => {
             </p>
           </div>
         </div>
+
+        <button
+          onClick={handleSyncR2}
+          disabled={isSyncing}
+          className="flex items-center space-x-2 px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition border border-slate-200 cursor-pointer disabled:opacity-50 shrink-0"
+          title="Scan Cloudflare R2 bucket to verify all files and remove orphaned records"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 text-slate-600 ${isSyncing ? 'animate-spin' : ''}`} />
+          <span>{isSyncing ? 'Syncing with Cloudflare R2...' : 'Sync with Cloudflare R2'}</span>
+        </button>
       </div>
 
       {feedback && (
@@ -283,8 +334,18 @@ export const StatementUploadsModule: React.FC = () => {
                       <input type="file" onChange={handleFileUpload} className="hidden" disabled={isUploading} />
                     </label>
                   </div>
+
+                  <button
+                    onClick={handleDeleteStatement}
+                    disabled={isDeleting}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold rounded-xl border border-rose-200 shadow-xs transition cursor-pointer disabled:opacity-50"
+                  >
+                    <Trash2 className="w-4 h-4 text-rose-600" />
+                    <span>{isDeleting ? 'Deleting from Cloudflare R2...' : 'Delete Statement File from R2'}</span>
+                  </button>
+
                   <p className="text-[10px] text-slate-400 text-center">
-                    Replacing will update the file in Cloudflare R2 and record an audit log in Cell History.
+                    Deleting permanently purges the file from Cloudflare R2, removes it from Documents, and immediately resets the grid cell back to Missing (Red).
                   </p>
                 </div>
               </div>

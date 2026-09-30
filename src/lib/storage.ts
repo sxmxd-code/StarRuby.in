@@ -3,7 +3,14 @@
 // Uses AWS S3 SDK with transparent mock fallback for local instant testing.
 // ==============================================================================
 
-import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectCommand,
+  ListObjectsV2Command,
+  HeadObjectCommand,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 const R2_ACCOUNT_ID = import.meta.env.VITE_CLOUDFLARE_R2_ACCOUNT_ID || '';
@@ -12,7 +19,7 @@ const R2_SECRET_ACCESS_KEY = import.meta.env.VITE_CLOUDFLARE_R2_SECRET_ACCESS_KE
 const R2_BUCKET = import.meta.env.VITE_CLOUDFLARE_R2_BUCKET_NAME || 'documents';
 const R2_PUBLIC_DOMAIN = import.meta.env.VITE_CLOUDFLARE_R2_PUBLIC_DOMAIN || '';
 
-const isR2Configured = Boolean(
+export const isR2Configured = Boolean(
   R2_ACCOUNT_ID &&
   R2_ACCESS_KEY_ID &&
   R2_SECRET_ACCESS_KEY &&
@@ -110,6 +117,83 @@ export async function uploadToR2(
     };
     reader.readAsDataURL(file);
   });
+}
+
+/**
+ * Permanently deletes an object from Cloudflare R2 and local mock storage
+ */
+export async function deleteFromR2(bucket: string, objectKey: string): Promise<boolean> {
+  if (!objectKey) return true;
+  localMockBlobStore.delete(objectKey);
+
+  if (isR2Configured && s3Client) {
+    try {
+      const command = new DeleteObjectCommand({
+        Bucket: bucket || R2_BUCKET,
+        Key: objectKey,
+      });
+      await s3Client.send(command);
+      console.log(`Cloudflare R2: Permanently deleted object ${objectKey} from bucket ${bucket || R2_BUCKET}`);
+      return true;
+    } catch (err: any) {
+      console.error('Cloudflare R2 Delete Failed:', err);
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Checks whether an object physically exists in Cloudflare R2
+ */
+export async function checkR2ObjectExists(bucket: string, objectKey: string): Promise<boolean> {
+  if (!objectKey) return false;
+
+  if (isR2Configured && s3Client) {
+    try {
+      const command = new HeadObjectCommand({
+        Bucket: bucket || R2_BUCKET,
+        Key: objectKey,
+      });
+      await s3Client.send(command);
+      return true;
+    } catch (err: any) {
+      if (err.name === 'NotFound' || err.$metadata?.httpStatusCode === 404) {
+        return false;
+      }
+    }
+  }
+
+  return localMockBlobStore.has(objectKey);
+}
+
+/**
+ * Lists all objects present in Cloudflare R2 bucket with given prefix
+ */
+export async function listR2Objects(prefix?: string): Promise<{ key: string; size: number; lastModified?: Date }[]> {
+  if (isR2Configured && s3Client) {
+    try {
+      const command = new ListObjectsV2Command({
+        Bucket: R2_BUCKET,
+        Prefix: prefix,
+      });
+      const res = await s3Client.send(command);
+      return (res.Contents || []).map(c => ({
+        key: c.Key || '',
+        size: c.Size || 0,
+        lastModified: c.LastModified,
+      }));
+    } catch (err) {
+      console.error('Failed to list Cloudflare R2 objects:', err);
+    }
+  }
+
+  return Array.from(localMockBlobStore.entries())
+    .filter(([k]) => !prefix || k.startsWith(prefix))
+    .map(([k, v]) => ({
+      key: k,
+      size: v.size,
+    }));
 }
 
 /**

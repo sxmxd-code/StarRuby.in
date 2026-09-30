@@ -2,14 +2,16 @@ import React, { useState, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
 import { uploadToR2 } from '../../lib/storage';
 import { extractDocumentMetadataAI, ExtractedInvoiceData, isGeminiConfigured } from '../../lib/gemini';
-import { FileText, Search, Upload, Paperclip, Sparkles, ExternalLink, Trash2, Bot, Check, X, Loader2 } from 'lucide-react';
+import { FileText, Search, Upload, Paperclip, Sparkles, ExternalLink, Trash2, Bot, Check, X, Loader2, RefreshCw } from 'lucide-react';
 import { DocumentRecord } from '../../types/database';
 
 export const DocumentsModule: React.FC = () => {
-  const { documents, attachDocument, deleteDocument, userTransactions } = useApp();
+  const { documents, attachDocument, deleteDocument, syncWithCloudflareR2, userTransactions } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [isUploading, setIsUploading] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [isDeletingId, setIsDeletingId] = useState<string | null>(null);
   const [selectedTxnId, setSelectedTxnId] = useState(userTransactions[0]?.id || '');
   const [docType, setDocType] = useState<'invoice' | 'receipt' | 'statement' | 'other'>('invoice');
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -78,6 +80,37 @@ export const DocumentsModule: React.FC = () => {
     }
   };
 
+  const handleSyncR2 = async () => {
+    setIsSyncing(true);
+    try {
+      const res = await syncWithCloudflareR2();
+      setFeedback(`Cloudflare R2 Synced: ${res.verified} files active in storage. ${res.removed > 0 ? `${res.removed} missing/orphaned records removed.` : 'All documents verified in sync!'}`);
+      setTimeout(() => setFeedback(null), 5000);
+    } catch (err) {
+      console.error('R2 Sync error:', err);
+      alert('Failed to sync with Cloudflare R2.');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleDeleteDoc = async (doc: DocumentRecord) => {
+    if (!window.confirm(`Permanently delete "${doc.file_name}" from Cloudflare R2 storage? This cannot be undone.`)) {
+      return;
+    }
+    setIsDeletingId(doc.id);
+    try {
+      await deleteDocument(doc.id);
+      setFeedback(`Success: File "${doc.file_name}" permanently deleted from Cloudflare R2 bucket "${doc.r2_bucket}" and database.`);
+      setTimeout(() => setFeedback(null), 5000);
+    } catch (err) {
+      console.error('Delete error:', err);
+      alert('Failed to delete file from Cloudflare R2.');
+    } finally {
+      setIsDeletingId(null);
+    }
+  };
+
   return (
     <div className="space-y-6">
       
@@ -103,12 +136,25 @@ export const DocumentsModule: React.FC = () => {
           </div>
         </div>
 
-        {/* Upload Button */}
-        <label className="flex items-center space-x-2 px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-bold cursor-pointer shadow-sm">
-          <Upload className="w-4 h-4" />
-          <span>{isUploading ? 'Uploading to R2...' : '+ Upload Document'}</span>
-          <input type="file" onChange={handleFileUpload} className="hidden" disabled={isUploading} />
-        </label>
+        {/* Action Buttons */}
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={handleSyncR2}
+            disabled={isSyncing}
+            className="flex items-center space-x-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition border border-slate-200 cursor-pointer disabled:opacity-50"
+            title="Scan Cloudflare R2 bucket to verify all files and remove orphaned records"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-slate-600 ${isSyncing ? 'animate-spin' : ''}`} />
+            <span>{isSyncing ? 'Syncing...' : 'Sync with R2'}</span>
+          </button>
+
+          {/* Upload Button */}
+          <label className="flex items-center space-x-2 px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-bold cursor-pointer shadow-sm">
+            <Upload className="w-4 h-4" />
+            <span>{isUploading ? 'Uploading to R2...' : '+ Upload Document'}</span>
+            <input type="file" onChange={handleFileUpload} className="hidden" disabled={isUploading} />
+          </label>
+        </div>
       </div>
 
       {feedback && (
@@ -160,15 +206,16 @@ export const DocumentsModule: React.FC = () => {
                       {doc.doc_type}
                     </span>
                     <button
-                      onClick={() => {
-                        if (window.confirm(`Delete document record "${doc.file_name}"?`)) {
-                          deleteDocument(doc.id);
-                        }
-                      }}
-                      className="text-slate-400 hover:text-rose-600 p-1 rounded hover:bg-rose-50 transition cursor-pointer"
-                      title="Delete document record"
+                      onClick={() => handleDeleteDoc(doc)}
+                      disabled={isDeletingId === doc.id}
+                      className="text-slate-400 hover:text-rose-600 p-1 rounded hover:bg-rose-50 transition cursor-pointer disabled:opacity-50"
+                      title="Delete document permanently from Cloudflare R2"
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      {isDeletingId === doc.id ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-600" />
+                      ) : (
+                        <Trash2 className="w-3.5 h-3.5" />
+                      )}
                     </button>
                   </div>
                 </div>

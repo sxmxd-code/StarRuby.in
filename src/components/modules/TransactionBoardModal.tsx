@@ -21,6 +21,7 @@ import {
   ShieldAlert,
   History,
   RotateCcw,
+  Trash2,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -45,6 +46,7 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
     addComment,
     documents,
     attachDocument,
+    deleteDocument,
     submitApproval,
     updateUserTransactionCell,
     recordVersions,
@@ -395,14 +397,27 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
                           <FileText className="w-3.5 h-3.5 text-rose-600 shrink-0" />
                           <span className="truncate font-medium text-slate-800">{doc.file_name}</span>
                         </div>
-                        <a
-                          href={doc.download_url || '#'}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-rose-700 text-[11px] hover:underline shrink-0 ml-2"
-                        >
-                          View
-                        </a>
+                        <div className="flex items-center space-x-2 shrink-0 ml-2">
+                          <a
+                            href={doc.download_url || '#'}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-rose-700 text-[11px] hover:underline"
+                          >
+                            View
+                          </a>
+                          <button
+                            onClick={async () => {
+                              if (window.confirm(`Delete document "${doc.file_name}" from Cloudflare R2?`)) {
+                                await deleteDocument(doc.id);
+                              }
+                            }}
+                            className="text-slate-400 hover:text-rose-600 p-0.5 rounded hover:bg-rose-50 cursor-pointer transition"
+                            title="Delete file permanently from Cloudflare R2"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
                     ))
                   )}

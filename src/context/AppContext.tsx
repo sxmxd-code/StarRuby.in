@@ -54,6 +54,7 @@ import { createCellAuditDelta } from '../lib/audit';
 import { normalizeAlias, resolvePartyFromNarration } from '../lib/alias';
 import { findPendingQueueMatches } from '../lib/matching';
 import { fetchLiveForexRates, LiveForexRates } from '../lib/forex';
+import { deleteFromR2, listR2Objects, isR2Configured } from '../lib/storage';
 
 interface AppContextType {
   // Authentication & Credentials
@@ -151,7 +152,9 @@ interface AppContextType {
   
   addComment: (userTxnId: string, message: string) => void;
   attachDocument: (doc: Omit<DocumentRecord, 'id' | 'uploaded_by' | 'created_at'>) => DocumentRecord;
-  deleteDocument: (id: string) => void;
+  deleteDocument: (id: string) => Promise<void>;
+  deleteStatementUpload: (accountId: string, month: string) => Promise<boolean>;
+  syncWithCloudflareR2: () => Promise<{ verified: number; removed: number }>;
   
   restoreCellVersion: (versionId: number) => { success: boolean; message: string };
   updateAppSetting: (key: string, value: string) => void;
@@ -413,6 +416,61 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (!resetRes.error && Array.isArray(resetRes.data)) {
           setPasswordResetRequests(resetRes.data as PasswordResetRequest[]);
           save('passwordResetRequests', resetRes.data);
+        }
+
+        // Automatic Cloudflare R2 Consistency Check:
+        // Ensure only files physically present in Cloudflare R2 are displayed as active.
+        if (isR2Configured) {
+          try {
+            const r2List = await listR2Objects();
+            const r2Keys = new Set(r2List.map(item => item.key));
+
+            // Purge phantom documents whose files were deleted from R2
+            if (!docRes.error && Array.isArray(docRes.data)) {
+              const liveDocs = docRes.data.filter(d => {
+                if (!d.r2_object_key) return true;
+                const exists = r2Keys.has(d.r2_object_key);
+                if (!exists && sb) {
+                  sb.from('documents').delete().eq('id', d.id).then(() => {});
+                }
+                return exists;
+              });
+              setDocuments(liveDocs);
+              save('documents', liveDocs);
+            }
+
+            // Reset phantom statement uploads whose files were deleted from R2
+            if (!stmtRes.error && Array.isArray(stmtRes.data)) {
+              const liveUploads = stmtRes.data.map(s => {
+                if (s.status === 'uploaded' && s.r2_object_key && !r2Keys.has(s.r2_object_key)) {
+                  if (sb) {
+                    sb.from('statement_uploads').update({
+                      status: 'pending',
+                      file_name: null,
+                      r2_object_key: null,
+                      file_size_bytes: null,
+                      uploaded_at: null,
+                      uploaded_by: null,
+                    }).eq('id', s.id).then(() => {});
+                  }
+                  return {
+                    ...s,
+                    status: 'pending' as const,
+                    file_name: undefined,
+                    r2_object_key: undefined,
+                    file_size_bytes: undefined,
+                    uploaded_at: undefined,
+                    uploaded_by: undefined,
+                  };
+                }
+                return s;
+              });
+              setStatementUploads(liveUploads);
+              save('statementUploads', liveUploads);
+            }
+          } catch (r2Err) {
+            console.warn('Initial Cloudflare R2 physical check notice:', r2Err);
+          }
         }
       } catch (err) {
         console.warn('Supabase initial fetch skipped (operating with local cache):', err);
@@ -2520,12 +2578,207 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return newDoc;
   };
 
-  const deleteDocument = (id: string): void => {
+  const deleteDocument = async (id: string): Promise<void> => {
+    const docToDelete = documents.find(d => d.id === id);
+    if (!docToDelete) return;
+
+    // 1. Physically delete from Cloudflare R2
+    if (docToDelete.r2_object_key) {
+      await deleteFromR2(docToDelete.r2_bucket || 'documents', docToDelete.r2_object_key);
+    }
+
+    // 2. Remove from documents table & local state
     const updated = documents.filter(d => d.id !== id);
     setDocuments(updated);
     save('documents', updated);
     if (supabase) {
       supabase.from('documents').delete().eq('id', id).then(() => {});
+    }
+
+    // 3. If this was a statement, reset statement_uploads so matrix cell turns RED immediately!
+    if (docToDelete.doc_type === 'statement' || docToDelete.r2_object_key?.startsWith('statements/')) {
+      const matchedUploads = statementUploads.filter(s => {
+        if (docToDelete.r2_object_key && s.r2_object_key === docToDelete.r2_object_key) return true;
+        if (docToDelete.file_name && s.file_name === docToDelete.file_name) return true;
+        if (docToDelete.r2_object_key && s.statement_month && s.account_id) {
+          const monthStr = s.statement_month.slice(0, 7);
+          if (docToDelete.r2_object_key.includes(s.account_id) && 
+             (docToDelete.r2_object_key.includes(monthStr) || docToDelete.r2_object_key.includes(monthStr.replace('-', '/')))) {
+            return true;
+          }
+        }
+        return false;
+      });
+
+      if (matchedUploads.length > 0) {
+        const matchedIds = new Set(matchedUploads.map(m => m.id));
+        const updatedUploads = statementUploads.map(s => {
+          if (matchedIds.has(s.id)) {
+            return {
+              ...s,
+              status: 'pending' as const,
+              file_name: undefined,
+              r2_object_key: undefined,
+              file_size_bytes: undefined,
+              uploaded_at: undefined,
+              uploaded_by: undefined,
+            };
+          }
+          return s;
+        });
+        setStatementUploads(updatedUploads);
+        save('statementUploads', updatedUploads);
+        if (supabase) {
+          for (const m of matchedUploads) {
+            supabase
+              .from('statement_uploads')
+              .update({
+                status: 'pending',
+                file_name: null,
+                r2_object_key: null,
+                file_size_bytes: null,
+                uploaded_at: null,
+                uploaded_by: null,
+              })
+              .eq('id', m.id)
+              .then(({ error }) => {
+                if (error) console.warn('Supabase reset statement upload notice:', error.message);
+              });
+          }
+        }
+        notifyRealtime('Statement file deleted from Cloudflare R2: grid cell reset to Missing (Red)');
+      }
+    }
+  };
+
+  const deleteStatementUpload = async (accountId: string, month: string): Promise<boolean> => {
+    const uploadRecord = statementUploads.find(s => s.account_id === accountId && s.statement_month === month);
+    if (!uploadRecord) return false;
+
+    // 1. Physically delete from Cloudflare R2
+    if (uploadRecord.r2_object_key) {
+      await deleteFromR2(uploadRecord.r2_bucket || 'documents', uploadRecord.r2_object_key);
+    }
+
+    // 2. Remove corresponding document from documents table
+    const matchingDocs = documents.filter(
+      d => (uploadRecord.r2_object_key && d.r2_object_key === uploadRecord.r2_object_key) ||
+           (d.doc_type === 'statement' && uploadRecord.file_name && d.file_name === uploadRecord.file_name) ||
+           (d.doc_type === 'statement' && d.r2_object_key?.includes(accountId) && (d.r2_object_key?.includes(month.slice(0, 7)) || d.r2_object_key?.includes(month.slice(0, 7).replace('-', '/'))))
+    );
+    if (matchingDocs.length > 0) {
+      const matchingIds = new Set(matchingDocs.map(d => d.id));
+      const updatedDocs = documents.filter(d => !matchingIds.has(d.id));
+      setDocuments(updatedDocs);
+      save('documents', updatedDocs);
+      if (supabase) {
+        for (const doc of matchingDocs) {
+          supabase.from('documents').delete().eq('id', doc.id).then(() => {});
+        }
+      }
+    }
+
+    // 3. Reset statement_uploads record to 'pending'
+    const updatedUploads = statementUploads.map(s => {
+      if (s.account_id === accountId && s.statement_month === month) {
+        return {
+          ...s,
+          status: 'pending' as const,
+          file_name: undefined,
+          r2_object_key: undefined,
+          file_size_bytes: undefined,
+          uploaded_at: undefined,
+          uploaded_by: undefined,
+        };
+      }
+      return s;
+    });
+    setStatementUploads(updatedUploads);
+    save('statementUploads', updatedUploads);
+
+    if (supabase) {
+      supabase
+        .from('statement_uploads')
+        .update({
+          status: 'pending',
+          file_name: null,
+          r2_object_key: null,
+          file_size_bytes: null,
+          uploaded_at: null,
+          uploaded_by: null,
+        })
+        .eq('id', uploadRecord.id)
+        .then(({ error }) => {
+          if (error) console.warn('Supabase reset statement upload error:', error.message);
+        });
+    }
+
+    notifyRealtime(`Statement deleted from R2: ${accountId} (${month.slice(0, 7)}) reset to Missing`);
+    return true;
+  };
+
+  const syncWithCloudflareR2 = async (): Promise<{ verified: number; removed: number }> => {
+    try {
+      const r2List = await listR2Objects();
+      const r2Keys = new Set(r2List.map(item => item.key));
+
+      let removedCount = 0;
+
+      // 1. Clean documents table if file was deleted in Cloudflare R2
+      const validDocs = documents.filter(d => {
+        if (!d.r2_object_key) return true;
+        const exists = r2Keys.has(d.r2_object_key);
+        if (!exists) {
+          removedCount++;
+          if (supabase) supabase.from('documents').delete().eq('id', d.id).then(() => {});
+          return false;
+        }
+        return true;
+      });
+
+      if (validDocs.length !== documents.length) {
+        setDocuments(validDocs);
+        save('documents', validDocs);
+      }
+
+      // 2. Clean statement_uploads if file was deleted in Cloudflare R2
+      const verifiedUploads = statementUploads.map(s => {
+        if (s.status === 'uploaded' && s.r2_object_key && !r2Keys.has(s.r2_object_key)) {
+          removedCount++;
+          if (supabase) {
+            supabase
+              .from('statement_uploads')
+              .update({
+                status: 'pending',
+                file_name: null,
+                r2_object_key: null,
+                file_size_bytes: null,
+                uploaded_at: null,
+                uploaded_by: null,
+              })
+              .eq('id', s.id)
+              .then(() => {});
+          }
+          return {
+            ...s,
+            status: 'pending' as const,
+            file_name: undefined,
+            r2_object_key: undefined,
+            file_size_bytes: undefined,
+            uploaded_at: undefined,
+            uploaded_by: undefined,
+          };
+        }
+        return s;
+      });
+
+      setStatementUploads(verifiedUploads);
+      save('statementUploads', verifiedUploads);
+
+      return { verified: r2Keys.size, removed: removedCount };
+    } catch (err) {
+      console.error('Error syncing with Cloudflare R2:', err);
+      return { verified: 0, removed: 0 };
     }
   };
 
@@ -2820,6 +3073,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addComment,
         attachDocument,
         deleteDocument,
+        deleteStatementUpload,
+        syncWithCloudflareR2,
         restoreCellVersion,
         updateAppSetting,
         assignCompanyToUser,
