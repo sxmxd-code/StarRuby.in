@@ -51,7 +51,7 @@ import {
 } from '../lib/supabase';
 
 import { createCellAuditDelta } from '../lib/audit';
-import { normalizeAlias } from '../lib/alias';
+import { normalizeAlias, resolvePartyFromNarration } from '../lib/alias';
 import { findPendingQueueMatches } from '../lib/matching';
 import { fetchLiveForexRates, LiveForexRates } from '../lib/forex';
 
@@ -117,15 +117,18 @@ interface AppContextType {
   addUserTransactionsBatch: (txns: Omit<UserTransaction, 'id' | 'date_of_entry' | 'status' | 'created_by' | 'created_at' | 'updated_at'>[]) => UserTransaction[];
   updateUserTransaction: (id: string, updates: Partial<UserTransaction>) => void;
   deleteUserTransaction: (id: string, reason: string) => boolean;
+  deleteUserTransactionsBatch: (txnIds: string[]) => void;
   updateUserTransactionCell: (id: string, column: keyof UserTransaction, value: any) => void;
   
   addBankTransaction: (txn: Omit<BankTransaction, 'id' | 'created_by' | 'created_at' | 'updated_at'>) => BankTransaction;
   deleteBankTransaction: (id: string, reason: string) => boolean;
+  deleteBankTransactionsBatch: (txnIds: string[]) => void;
   
   linkTxnBank: (userTxnId: string, bankTxnId: string, method?: 'manual' | 'csv') => void;
   unlinkTxnBank: (userTxnId: string, bankTxnId: string) => void;
   
   closeInMatchTab: (userTxnId: string, linkedBankIds: string[], verifiedWithBank: 'Yes' | 'No', comment?: string) => void;
+  moveDiscrepancyToOpen: (userTxnId: string, comment?: string) => void;
   submitApproval: (userTxnId: string, layer: 1 | 2 | 3, decision: 'approved' | 'rejected', comment?: string) => { success: boolean; message: string };
   
   addParty: (party: Omit<Party, 'id' | 'created_at'>, customId?: string) => Party;
@@ -999,6 +1002,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return true;
   };
 
+  const deleteUserTransactionsBatch = (txnIds: string[]) => {
+    if (txnIds.length === 0) return;
+    const toDeleteSet = new Set(txnIds);
+    const updated = userTransactions.filter(t => !toDeleteSet.has(t.id));
+    setUserTransactions(updated);
+    save('userTransactions', updated);
+    if (supabase) {
+      supabase.from('transactions_user').delete().in('id', txnIds).then(({ error }) => {
+        if (error) console.warn('Supabase batch delete user transactions notice:', error.message);
+      });
+    }
+  };
+
   // Operational Action 3: Update Cell with Audit Version Logging
   const updateUserTransactionCell = (id: string, column: keyof UserTransaction, value: any) => {
     const existing = userTransactions.find(t => t.id === id);
@@ -1060,8 +1076,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newId = `BTRN${maxNum + 1}`;
     const now = new Date().toISOString();
 
+    // Auto-resolve party from narration if not provided
+    let resolvedPartyId = data.party_id;
+    if (!resolvedPartyId && data.narration) {
+      const match = resolvePartyFromNarration(data.narration, parties, partyAliases);
+      if (match.party) {
+        resolvedPartyId = match.party.id;
+      } else if (data.narration.trim().length >= 3) {
+        const norm = normalizeAlias(data.narration);
+        const exists = partyAliases.some(a => a.alias_normalized === norm);
+        if (!exists) {
+          const maxAliasId = partyAliases.reduce((acc, a) => {
+            const num = parseInt(a.id.replace(/\D/g, ''), 10);
+            return isNaN(num) ? acc : Math.max(acc, num);
+          }, 0);
+          const newAlias: PartyAlias = {
+            id: `PALIAS${maxAliasId + 1}`,
+            alias_name: data.narration.trim(),
+            alias_normalized: norm,
+            status: 'unmapped',
+            created_by: currentUser.id,
+            created_at: now,
+          };
+          const updatedAliases = [newAlias, ...partyAliases];
+          setPartyAliases(updatedAliases);
+          save('partyAliases', updatedAliases);
+          if (supabase) {
+            supabase.from('party_aliases').insert([newAlias]).then(() => {});
+          }
+        }
+      }
+    }
+
     const newTxn: BankTransaction = {
       ...data,
+      party_id: resolvedPartyId,
       id: newId,
       created_by: currentUser.id,
       created_at: now,
@@ -1111,6 +1160,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     return true;
+  };
+
+  const deleteBankTransactionsBatch = (txnIds: string[]) => {
+    if (txnIds.length === 0) return;
+    const toDeleteSet = new Set(txnIds);
+    const updated = bankTransactions.filter(t => !toDeleteSet.has(t.id));
+    setBankTransactions(updated);
+    save('bankTransactions', updated);
+    if (supabase) {
+      supabase.from('transactions_bank').delete().in('id', txnIds).then(({ error }) => {
+        if (error) console.warn('Supabase batch delete bank transactions notice:', error.message);
+      });
+    }
   };
 
   // Operational Action 5: Link Bank Transactions (Many-to-Many)
@@ -1174,10 +1236,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 3. Update transaction status to 'in_approval' and update verified_with_bank flag
     const txn = userTransactions.find(t => t.id === userTxnId);
     if (txn) {
+      // Auto-confirm amount from Unconfirmed -> Confirmed when matched with bank
+      const isUnconfirmed = txn.amount_confirmed === 'Unconfirmed';
       const updated = {
         ...txn,
         status: 'in_approval' as const,
         verified_with_bank: verifiedWithBank,
+        amount_confirmed: (isUnconfirmed ? 'Confirmed' : txn.amount_confirmed) as 'Confirmed' | 'Unconfirmed',
         updated_at: new Date().toISOString(),
       };
       const deltas = createCellAuditDelta('transactions_user', userTxnId, txn, updated, currentUser.id, recordVersions);
@@ -1198,9 +1263,50 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         supabase.from('transactions_user').update({
           status: 'in_approval',
           verified_with_bank: verifiedWithBank,
+          amount_confirmed: updated.amount_confirmed,
           updated_at: updated.updated_at,
         }).eq('id', userTxnId).then(() => {});
       }
+    }
+  };
+
+  const moveDiscrepancyToOpen = (userTxnId: string, comment?: string) => {
+    const txn = userTransactions.find(t => t.id === userTxnId);
+    if (!txn) return;
+
+    const maxApprId = approvals.reduce((acc, a) => Math.max(acc, a.id), 0);
+    const resetApproval: Approval = {
+      id: maxApprId + 1,
+      user_txn_id: userTxnId,
+      layer: 1,
+      approver_id: currentUser.id,
+      decision: 'rejected',
+      comment: comment || 'Moved to Open for review',
+      decided_at: new Date().toISOString(),
+    };
+    const updatedApprovals = [...approvals.filter(a => !(a.user_txn_id === userTxnId && a.layer === 1)), resetApproval];
+    setApprovals(updatedApprovals);
+    save('approvals', updatedApprovals);
+
+    const updatedTxn = {
+      ...txn,
+      status: 'open' as const,
+      updated_at: new Date().toISOString(),
+    };
+    const updatedTxns = userTransactions.map(t => (t.id === userTxnId ? updatedTxn : t));
+    setUserTransactions(updatedTxns);
+    save('userTransactions', updatedTxns);
+
+    if (supabase) {
+      supabase.from('approvals').upsert([resetApproval], { onConflict: 'user_txn_id, layer' }).then(() => {});
+      supabase.from('transactions_user').update({
+        status: 'open',
+        updated_at: updatedTxn.updated_at,
+      }).eq('id', userTxnId).then(() => {});
+    }
+
+    if (comment) {
+      addComment(userTxnId, `[Moved to Open]: ${comment}`);
     }
   };
 
@@ -2338,7 +2444,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (supabase) {
         supabase.from('statement_uploads').update(updateData).eq('id', existing.id).then(() => {});
       }
+    } else {
+      const maxNum = statementUploads.reduce((acc, s) => {
+        const num = parseInt(s.id.replace(/\D/g, ''), 10);
+        return isNaN(num) ? acc : Math.max(acc, num);
+      }, 0);
+      const newUpload: StatementUpload = {
+        id: `STU${maxNum + 1}`,
+        account_id: accountId,
+        statement_month: month,
+        status: 'uploaded',
+        r2_bucket: 'documents',
+        r2_object_key: r2Key,
+        file_name: fileName,
+        file_size_bytes: sizeBytes,
+        uploaded_by: currentUser.id,
+        uploaded_at: new Date().toISOString(),
+      };
+      const updatedUploads = [...statementUploads, newUpload];
+      setStatementUploads(updatedUploads);
+      save('statementUploads', updatedUploads);
+      if (supabase) {
+        supabase.from('statement_uploads').insert([newUpload]).then(({ error }) => {
+          if (error) console.warn('Supabase insert statement upload notice:', error.message);
+        });
+      }
     }
+
+    // Always register in documents table so it appears in Document Search & Hybrid Search
+    attachDocument({
+      file_name: fileName,
+      r2_bucket: 'documents',
+      r2_object_key: r2Key,
+      content_type: fileName.toLowerCase().endsWith('.csv') ? 'text/csv' : 'application/pdf',
+      size_bytes: sizeBytes,
+      doc_type: 'statement',
+    });
   };
 
   // Operational Action 12: Comments & Documents
@@ -2652,12 +2793,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addUserTransactionsBatch,
         updateUserTransaction,
         deleteUserTransaction,
+        deleteUserTransactionsBatch,
         updateUserTransactionCell,
         addBankTransaction,
         deleteBankTransaction,
+        deleteBankTransactionsBatch,
         linkTxnBank,
         unlinkTxnBank,
         closeInMatchTab,
+        moveDiscrepancyToOpen,
         submitApproval,
         addParty,
         updateParty,

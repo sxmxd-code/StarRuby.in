@@ -3,6 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { uploadToR2, getR2DownloadUrl } from '../../lib/storage';
 import { CalendarCheck, Upload, FileText, CheckCircle2, AlertCircle, Download, RefreshCw, X, HardDrive } from 'lucide-react';
 import { StatementUpload, User } from '../../types/database';
+import { formatDisplayDateTime } from '../../lib/formatters';
 
 export const StatementUploadsModule: React.FC = () => {
   const {
@@ -252,11 +253,8 @@ export const StatementUploadsModule: React.FC = () => {
                     {activeRecord.uploaded_at && (
                       <div className="flex justify-between">
                         <span className="text-slate-500">Upload Date:</span>
-                        <span className="font-medium text-slate-800">
-                          {new Date(activeRecord.uploaded_at).toLocaleString('en-IN', {
-                            dateStyle: 'medium',
-                            timeStyle: 'short',
-                          })}
+                        <span className="font-medium text-slate-800 font-mono text-[11px]">
+                          {formatDisplayDateTime(activeRecord.uploaded_at)}
                         </span>
                       </div>
                     )}

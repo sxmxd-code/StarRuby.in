@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
 import { UserTransaction, BankTransaction } from '../../types/database';
 import { uploadToR2, getR2DownloadUrl } from '../../lib/storage';
+import { formatDisplayDate, formatDisplayDateTime, formatCurrencyAmount } from '../../lib/formatters';
 import {
   X,
   Send,
@@ -18,6 +19,8 @@ import {
   Unlink,
   Check,
   ShieldAlert,
+  History,
+  RotateCcw,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -44,6 +47,8 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
     attachDocument,
     submitApproval,
     updateUserTransactionCell,
+    recordVersions,
+    moveDiscrepancyToOpen,
   } = useApp();
 
   const [newComment, setNewComment] = useState('');
@@ -60,19 +65,29 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
   const linkedLinks = txnBankLinks.filter(l => l.user_txn_id === transaction.id);
   const linkedBankTxns = bankTransactions.filter(b => linkedLinks.some(l => l.bank_txn_id === b.id));
 
-  // Find Comments & Documents
-  const txnComments = comments.filter(c => c.user_txn_id === transaction.id);
+  // Find Documents
   const txnDocs = documents.filter(d => d.user_txn_id === transaction.id);
 
-  // Find Approvals History
+  // Find Approvals
   const txnApprovals = approvals.filter(a => a.user_txn_id === transaction.id);
   const layer1 = txnApprovals.find(a => a.layer === 1 && a.decision === 'approved');
   const layer2 = txnApprovals.find(a => a.layer === 2 && a.decision === 'approved');
   const layer3 = txnApprovals.find(a => a.layer === 3 && a.decision === 'approved');
 
+  // Find Comments
+  const txnComments = comments.filter(c => c.user_txn_id === transaction.id);
+
+  // Find Cell-Level Audit Versions
+  const txnVersions = useMemo(() => {
+    return recordVersions
+      .filter(v => v.table_name === 'transactions_user' && v.record_id === transaction.id)
+      .sort((a, b) => new Date(b.changed_at).getTime() - new Date(a.changed_at).getTime());
+  }, [recordVersions, transaction.id]);
+
   const handleSendComment = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newComment.trim()) return;
+
     addComment(transaction.id, newComment.trim());
     setNewComment('');
   };
@@ -83,18 +98,19 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
 
     setIsUploading(true);
     try {
-      const result = await uploadToR2(file, 'documents', transaction.id);
+      const res = await uploadToR2(file, 'documents', transaction.id);
       attachDocument({
         file_name: file.name,
-        r2_bucket: result.bucket,
-        r2_object_key: result.objectKey,
+        r2_bucket: res.bucket,
+        r2_object_key: res.objectKey,
         content_type: file.type || 'application/pdf',
-        size_bytes: result.sizeBytes,
+        size_bytes: res.sizeBytes,
         doc_type: 'invoice',
         user_txn_id: transaction.id,
+        download_url: res.publicUrl,
       });
     } catch (err) {
-      console.error('File upload error:', err);
+      console.error('File upload failed:', err);
     } finally {
       setIsUploading(false);
     }
@@ -112,9 +128,15 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
     }
   };
 
-  const handleReject = (layer: 1 | 2 | 3) => {
-    const res = submitApproval(transaction.id, layer, 'rejected', approvalComment || 'Rejected by approver');
-    setApprovalFeedback(res.message);
+  const handleMoveToOpen = () => {
+    const reason = approvalComment.trim() || 'Moved to Open for review / queries';
+    moveDiscrepancyToOpen(transaction.id, reason);
+    if (approvalComment.trim()) {
+      addComment(transaction.id, `[Query Raised]: ${approvalComment.trim()}`);
+    }
+    setApprovalFeedback('Transaction moved back to Open for review with query recorded.');
+    setApprovalComment('');
+    setTimeout(() => setApprovalFeedback(null), 4000);
   };
 
   return (
@@ -168,23 +190,23 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
             </div>
           ) : null}
 
-          {/* 3-Layer Approval Progress Gauge */}
-          <div className="bg-white p-3.5 sm:p-4 rounded-xl border border-slate-200 shadow-sm">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3">
-              3-Layer Approval Journey
-            </h4>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-4">
-              
+          {/* 3-Layer Governance Stepper */}
+          <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-3">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+              3-Layer Approval Governance Workflow
+            </h3>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               {/* Layer 1 */}
               <div className={`p-3 rounded-lg border text-xs ${
                 layer1 ? 'bg-emerald-50 border-emerald-300 text-emerald-900' : 'bg-slate-50 border-slate-200 text-slate-500'
               }`}>
                 <div className="flex items-center justify-between font-bold">
-                  <span>Layer 1: Closing</span>
+                  <span>Layer 1: Closed in Match</span>
                   {layer1 ? <Check className="w-4 h-4 text-emerald-600" /> : <Clock className="w-4 h-4 text-slate-400" />}
                 </div>
                 <p className="text-[11px] mt-1 text-slate-600">
-                  {layer1 ? `Closed in Match Tab by ${layer1.approver_id}` : 'Pending Match Tab Closing'}
+                  {layer1 ? `Closed by ${layer1.approver_id}` : 'Pending user action in Match Tab'}
                 </p>
               </div>
 
@@ -195,7 +217,7 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
               }`}>
                 <div className="flex items-center justify-between font-bold">
                   <span>Layer 2: 1st Admin Approval</span>
-                  {layer2 ? <Check className="w-4 h-4 text-emerald-600" /> : <Clock className="w-4 h-4 text-amber-500" />}
+                  {layer2 ? <Check className="w-4 h-4 text-emerald-600" /> : <Clock className="w-4 h-4 text-slate-400" />}
                 </div>
                 <p className="text-[11px] mt-1 text-slate-600">
                   {layer2 ? `Approved by Admin ${layer2.approver_id} (Ready for Accounting)` : 'Awaiting Harshil or Vismay'}
@@ -215,7 +237,6 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
                   {layer3 ? `Closed by Admin ${layer3.approver_id}` : layer2 ? 'Awaiting the OTHER Admin' : 'Pending Layer 2'}
                 </p>
               </div>
-
             </div>
           </div>
 
@@ -246,7 +267,7 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
                 <div>
                   <span className="text-slate-400 block text-[10px] uppercase">Amount & Currency</span>
                   <span className="text-base font-bold text-slate-900 tabular-nums">
-                    {transaction.currency} {transaction.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    {formatCurrencyAmount(transaction.amount, transaction.currency)}
                   </span>
                   {transaction.amount_in_inr ? (
                     <span className="text-[11px] text-slate-500 block tabular-nums">
@@ -257,43 +278,30 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
 
                 <div>
                   <span className="text-slate-400 block text-[10px] uppercase">Date of Transaction</span>
-                  <span className="font-medium text-slate-800">{transaction.date_of_transaction}</span>
+                  <span className="font-medium text-slate-800">{formatDisplayDate(transaction.date_of_transaction)}</span>
                 </div>
 
                 <div>
                   <span className="text-slate-400 block text-[10px] uppercase">Direction</span>
-                  <span className={`font-bold ${transaction.direction === 'Receipt' ? 'text-emerald-700' : 'text-slate-800'}`}>
+                  <span className={`inline-block mt-0.5 px-2 py-0.5 text-[10px] font-bold rounded ${
+                    transaction.direction === 'Payment' ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
+                  }`}>
                     {transaction.direction}
                   </span>
                 </div>
 
                 <div className="col-span-2">
-                  <span className="text-slate-400 block text-[10px] uppercase">Description / Purpose</span>
-                  <p className="text-slate-800 font-medium bg-slate-50 p-2 rounded border border-slate-100 mt-0.5">
-                    {transaction.description || 'No description entered'}
-                  </p>
+                  <span className="text-slate-400 block text-[10px] uppercase">Description / Note</span>
+                  <p className="text-slate-800 italic mt-0.5">{transaction.description || '—'}</p>
                 </div>
 
                 <div>
-                  <span className="text-slate-400 block text-[10px] uppercase">Verified with Bank?</span>
-                  <div className="flex items-center space-x-2 mt-1">
-                    <span className={`px-2 py-0.5 text-xs font-bold rounded ${
-                      transaction.verified_with_bank === 'Yes' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'
-                    }`}>
-                      {transaction.verified_with_bank}
-                    </span>
-                    {(currentRole === 'Admin' || currentRole === 'Accountant' || currentRole === 'Manager') && (
-                      <button
-                        onClick={() => {
-                          const nextVal = transaction.verified_with_bank === 'Yes' ? 'No' : 'Yes';
-                          updateUserTransactionCell(transaction.id, 'verified_with_bank', nextVal);
-                        }}
-                        className="text-[10px] text-rose-700 hover:underline"
-                      >
-                        Toggle Manual
-                      </button>
-                    )}
-                  </div>
+                  <span className="text-slate-400 block text-[10px] uppercase">Bank Verified Flag</span>
+                  <span className={`inline-block mt-0.5 px-2 py-0.5 text-[10px] font-bold rounded ${
+                    transaction.verified_with_bank === 'Yes' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'
+                  }`}>
+                    {transaction.verified_with_bank}
+                  </span>
                 </div>
 
                 <div>
@@ -309,7 +317,7 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
                         const nextVal = transaction.amount_confirmed === 'Confirmed' ? 'Unconfirmed' : 'Confirmed';
                         updateUserTransactionCell(transaction.id, 'amount_confirmed', nextVal);
                       }}
-                      className="text-[10px] text-rose-700 hover:underline"
+                      className="text-[10px] text-rose-700 hover:underline cursor-pointer"
                     >
                       Change
                     </button>
@@ -341,8 +349,8 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
                     <div key={b.id} className="p-2.5 rounded-lg border border-blue-100 bg-blue-50/50 text-xs flex items-start justify-between">
                       <div>
                         <div className="flex items-center space-x-2">
-                          <span className="font-bold text-blue-950">{b.id}</span>
-                          <span className="text-[11px] text-slate-500">{b.value_date}</span>
+                          <span className="font-bold text-blue-950 font-mono">{b.id}</span>
+                          <span className="text-[11px] text-slate-500 font-sans">{formatDisplayDate(b.value_date)}</span>
                           <span className="font-mono font-bold text-slate-900 tabular-nums">
                             {b.debit > 0 ? `Debit: -${b.debit.toFixed(2)}` : `Credit: +${b.credit.toFixed(2)}`}
                           </span>
@@ -353,7 +361,7 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
 
                       <button
                         onClick={() => unlinkTxnBank(transaction.id, b.id)}
-                        className="text-slate-400 hover:text-rose-700 p-1"
+                        className="text-slate-400 hover:text-rose-700 p-1 cursor-pointer"
                         title="Unlink bank line"
                       >
                         <Unlink className="w-3.5 h-3.5" />
@@ -378,22 +386,26 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
                 </div>
 
                 <div className="space-y-1.5">
-                  {txnDocs.map(doc => (
-                    <div key={doc.id} className="flex items-center justify-between p-2 rounded bg-slate-50 border text-xs">
-                      <div className="flex items-center space-x-2 truncate">
-                        <FileText className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                        <span className="truncate font-medium text-slate-800">{doc.file_name}</span>
+                  {txnDocs.length === 0 ? (
+                    <p className="text-slate-400 text-xs italic">No documents attached.</p>
+                  ) : (
+                    txnDocs.map(doc => (
+                      <div key={doc.id} className="flex items-center justify-between p-2 rounded bg-slate-50 border text-xs">
+                        <div className="flex items-center space-x-2 truncate">
+                          <FileText className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                          <span className="truncate font-medium text-slate-800">{doc.file_name}</span>
+                        </div>
+                        <a
+                          href={doc.download_url || '#'}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-rose-700 text-[11px] hover:underline shrink-0 ml-2"
+                        >
+                          View
+                        </a>
                       </div>
-                      <a
-                        href={doc.download_url || '#'}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-rose-700 text-[11px] hover:underline shrink-0 ml-2"
-                      >
-                        View
-                      </a>
-                    </div>
-                  ))}
+                    ))
+                  )}
                 </div>
               </div>
             </div>
@@ -405,13 +417,13 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
             <div className="bg-rose-50/80 p-4 rounded-xl border border-rose-200 shadow-sm space-y-3">
               <h4 className="text-xs font-bold uppercase tracking-wider text-rose-900 flex items-center space-x-2">
                 <Shield className="w-4 h-4 text-rose-700" />
-                <span>Admin Approval Panel ({currentUser.full_name})</span>
+                <span>Admin Governance Panel ({currentUser.full_name})</span>
               </h4>
 
               <div className="flex flex-col sm:flex-row items-center gap-3">
                 <input
                   type="text"
-                  placeholder="Optional approval/rejection note..."
+                  placeholder="Optional approval note or query reason for staff..."
                   value={approvalComment}
                   onChange={(e) => setApprovalComment(e.target.value)}
                   className="flex-1 bg-white border border-rose-200 rounded-lg px-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-rose-600 w-full"
@@ -421,7 +433,7 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
                   {!layer2 && (
                     <button
                       onClick={() => handleApprove(2)}
-                      className="flex-1 sm:flex-none px-3.5 sm:px-4 py-2 sm:py-1.5 bg-rose-700 text-white rounded-lg text-xs font-bold hover:bg-rose-800 shadow-sm text-center"
+                      className="flex-1 sm:flex-none px-3.5 sm:px-4 py-2 sm:py-1.5 bg-rose-700 text-white rounded-lg text-xs font-bold hover:bg-rose-800 shadow-sm text-center cursor-pointer"
                     >
                       Layer 2 Approve
                     </button>
@@ -430,17 +442,17 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
                   {layer2 && !layer3 && (
                     <button
                       onClick={() => handleApprove(3)}
-                      className="flex-1 sm:flex-none px-3.5 sm:px-4 py-2 sm:py-1.5 bg-emerald-700 text-white rounded-lg text-xs font-bold hover:bg-emerald-800 shadow-sm text-center"
+                      className="flex-1 sm:flex-none px-3.5 sm:px-4 py-2 sm:py-1.5 bg-emerald-700 text-white rounded-lg text-xs font-bold hover:bg-emerald-800 shadow-sm text-center cursor-pointer"
                     >
                       Layer 3 Review & Close
                     </button>
                   )}
 
                   <button
-                    onClick={() => handleReject(layer2 ? 3 : 2)}
-                    className="px-3 py-2 sm:py-1.5 bg-slate-200 text-rose-900 rounded-lg text-xs font-semibold hover:bg-rose-200"
+                    onClick={handleMoveToOpen}
+                    className="px-3 py-2 sm:py-1.5 bg-slate-200 text-rose-900 rounded-lg text-xs font-semibold hover:bg-rose-200 cursor-pointer"
                   >
-                    Reject
+                    Move to Open (Query)
                   </button>
                 </div>
               </div>
@@ -463,7 +475,7 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
                     <div key={c.id} className="p-2.5 rounded-lg bg-slate-50 border border-slate-100 text-xs">
                       <div className="flex items-center justify-between mb-1">
                         <span className="font-bold text-slate-800">{author ? author.full_name : c.author_id}</span>
-                        <span className="text-[10px] text-slate-400">{new Date(c.created_at).toLocaleString()}</span>
+                        <span className="text-[10px] text-slate-400 font-mono">{formatDisplayDateTime(c.created_at)}</span>
                       </div>
                       <p className="text-slate-700">{c.message}</p>
                     </div>
@@ -497,13 +509,58 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
             )}
           </div>
 
+          {/* Cell-Level Version & Audit History */}
+          <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-3">
+            <div className="flex items-center justify-between">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center space-x-1.5">
+                <History className="w-4 h-4 text-blue-600" />
+                <span>Transaction Audit Trail & Version History ({txnVersions.length})</span>
+              </h4>
+              <span className="text-[10px] text-slate-400 font-normal">Cell mutations with old &rarr; new values</span>
+            </div>
+
+            {txnVersions.length === 0 ? (
+              <p className="text-slate-400 text-xs italic">No modification history recorded yet for this transaction.</p>
+            ) : (
+              <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                {txnVersions.map(v => {
+                  const author = allUsers.find(u => u.id === v.changed_by);
+                  return (
+                    <div key={v.id} className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-xs space-y-1">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <div className="flex items-center space-x-2">
+                          <span className="font-bold text-slate-800 font-mono text-[10px] bg-slate-200 px-1.5 py-0.5 rounded">
+                            {v.column_name}
+                          </span>
+                          <span className="text-slate-600">by {author ? author.full_name : v.changed_by}</span>
+                        </div>
+                        <span className="text-slate-400 font-mono text-[10px]">
+                          {formatDisplayDateTime(v.changed_at)}
+                        </span>
+                      </div>
+                      <div className="flex items-center space-x-2 font-mono text-[11px]">
+                        <span className="text-rose-700 line-through bg-rose-50 px-1.5 py-0.5 rounded">
+                          {v.old_value !== undefined && v.old_value !== '' ? String(v.old_value) : '(empty)'}
+                        </span>
+                        <span className="text-slate-400">&rarr;</span>
+                        <span className="text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded">
+                          {v.new_value !== undefined && v.new_value !== '' ? String(v.new_value) : '(empty)'}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
         </div>
 
         {/* Footer */}
         <div className="bg-slate-100 px-6 py-3 border-t border-slate-200 flex justify-end">
           <button
             onClick={onClose}
-            className="px-4 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg text-xs font-semibold"
+            className="px-4 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg text-xs font-semibold cursor-pointer"
           >
             Close Board
           </button>

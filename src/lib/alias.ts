@@ -49,3 +49,53 @@ export function calculateTrigramSimilarity(str1: string, str2: string): number {
   const union = tri1.size + tri2.size - intersection;
   return union === 0 ? 0 : Number((intersection / union).toFixed(4));
 }
+
+export interface PartyResolutionResult {
+  party: any | null;
+  matchedBy: 'system_name' | 'alias' | null;
+  matchedAlias?: any;
+}
+
+/**
+ * Resolves a bank statement narration against known Party System Names and Aliases.
+ */
+export function resolvePartyFromNarration(
+  narration: string,
+  parties: any[],
+  partyAliases: any[]
+): PartyResolutionResult {
+  if (!narration || !narration.trim()) {
+    return { party: null, matchedBy: null };
+  }
+
+  const cleanNorm = normalizeAlias(narration);
+  if (!cleanNorm) return { party: null, matchedBy: null };
+
+  // 1. Direct System Name Match (Exact or substring)
+  for (const party of parties) {
+    const sysNorm = normalizeAlias(party.system_name || party.party_name || '');
+    if (sysNorm && sysNorm.length >= 3) {
+      if (cleanNorm === sysNorm || cleanNorm.includes(sysNorm)) {
+        return { party, matchedBy: 'system_name' };
+      }
+    }
+  }
+
+  // 2. Mapped Aliases Match
+  for (const alias of partyAliases) {
+    if (alias.status === 'mapped' && alias.party_id) {
+      const aNorm = alias.alias_normalized || normalizeAlias(alias.alias_name);
+      if (aNorm && aNorm.length >= 3) {
+        if (cleanNorm === aNorm || cleanNorm.includes(aNorm)) {
+          const matchedParty = parties.find(p => p.id === alias.party_id);
+          if (matchedParty) {
+            return { party: matchedParty, matchedBy: 'alias', matchedAlias: alias };
+          }
+        }
+      }
+    }
+  }
+
+  return { party: null, matchedBy: null };
+}
+

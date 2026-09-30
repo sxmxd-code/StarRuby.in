@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
 import { UserTransaction, BankTransaction } from '../../types/database';
-import { AlertTriangle, CheckCircle, HelpCircle, Landmark, ExternalLink } from 'lucide-react';
+import { formatDisplayDate, formatCurrencyAmount } from '../../lib/formatters';
+import { AlertTriangle, CheckCircle, HelpCircle, Landmark, ExternalLink, RotateCcw, MessageSquarePlus } from 'lucide-react';
 import { TransactionBoardModal } from './TransactionBoardModal';
 
 export const DiscrepanciesModule: React.FC<{ onNavigateToMatch?: () => void }> = ({ onNavigateToMatch }) => {
@@ -12,12 +13,16 @@ export const DiscrepanciesModule: React.FC<{ onNavigateToMatch?: () => void }> =
     partiesMap,
     accounts,
     updateUserTransactionCell,
+    moveDiscrepancyToOpen,
+    addComment,
     currentRole,
   } = useApp();
 
   const [activeCategory, setActiveCategory] = useState<'unconfirmed' | 'unverified' | 'unlinked_bank'>('unconfirmed');
   const [selectedBoardTxn, setSelectedBoardTxn] = useState<UserTransaction | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [queryInputTxnId, setQueryInputTxnId] = useState<string | null>(null);
+  const [queryComment, setQueryComment] = useState('');
 
   // 1. Unconfirmed Amounts (scoped by company/role)
   const unconfirmedTxns = useMemo(() => {
@@ -57,6 +62,18 @@ export const DiscrepanciesModule: React.FC<{ onNavigateToMatch?: () => void }> =
     setTimeout(() => setFeedback(null), 3000);
   };
 
+  const handleMoveToOpenWithQuery = (txnId: string) => {
+    const comment = queryComment.trim() || 'Discrepancy flagged: moved to Open for query resolution';
+    moveDiscrepancyToOpen(txnId, comment);
+    if (queryComment.trim()) {
+      addComment(txnId, `[Discrepancy Query]: ${queryComment.trim()}`);
+    }
+    setFeedback(`Transaction ${txnId} moved to Open with query recorded.`);
+    setQueryInputTxnId(null);
+    setQueryComment('');
+    setTimeout(() => setFeedback(null), 4000);
+  };
+
   return (
     <div className="space-y-6">
       <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -76,24 +93,24 @@ export const DiscrepanciesModule: React.FC<{ onNavigateToMatch?: () => void }> =
         <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200 text-xs font-semibold overflow-x-auto max-w-full shrink-0">
           <button
             onClick={() => setActiveCategory('unconfirmed')}
-            className={`px-3 py-1.5 rounded-md transition whitespace-nowrap ${
-              activeCategory === 'unconfirmed' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'
+            className={`px-3 py-1.5 rounded-md transition whitespace-nowrap cursor-pointer ${
+              activeCategory === 'unconfirmed' ? 'bg-white text-slate-900 shadow-sm font-bold' : 'text-slate-600'
             }`}
           >
             Unconfirmed ({unconfirmedTxns.length})
           </button>
           <button
             onClick={() => setActiveCategory('unverified')}
-            className={`px-3 py-1.5 rounded-md transition ${
-              activeCategory === 'unverified' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'
+            className={`px-3 py-1.5 rounded-md transition whitespace-nowrap cursor-pointer ${
+              activeCategory === 'unverified' ? 'bg-white text-slate-900 shadow-sm font-bold' : 'text-slate-600'
             }`}
           >
             Unverified Bank ({unverifiedTxns.length})
           </button>
           <button
             onClick={() => setActiveCategory('unlinked_bank')}
-            className={`px-3 py-1.5 rounded-md transition ${
-              activeCategory === 'unlinked_bank' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'
+            className={`px-3 py-1.5 rounded-md transition whitespace-nowrap cursor-pointer ${
+              activeCategory === 'unlinked_bank' ? 'bg-white text-slate-900 shadow-sm font-bold' : 'text-slate-600'
             }`}
           >
             Unlinked Bank Lines ({unlinkedBankTxns.length})
@@ -134,33 +151,41 @@ export const DiscrepanciesModule: React.FC<{ onNavigateToMatch?: () => void }> =
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {unconfirmedTxns.map(t => (
-                  <tr key={t.id} className="hover:bg-slate-50">
-                    <td className="p-3 font-bold text-rose-900">{t.id}</td>
-                    <td className="p-3 text-slate-600">{t.date_of_transaction}</td>
-                    <td className="p-3 font-semibold text-slate-900">
-                      {partiesMap.get(t.party_id || '')?.system_name || t.party_name_raw}
-                    </td>
-                    <td className="p-3 text-right font-mono font-bold text-slate-900 tabular-nums">
-                      {t.currency} {t.amount.toFixed(2)}
-                    </td>
-                    <td className="p-3 text-slate-600">{t.description || '—'}</td>
-                    <td className="p-3 text-right space-x-2">
-                      <button
-                        onClick={() => setSelectedBoardTxn(t)}
-                        className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-semibold text-xs"
-                      >
-                        Board
-                      </button>
-                      <button
-                        onClick={() => handleConfirmAmount(t.id)}
-                        className="px-2.5 py-1 bg-emerald-700 hover:bg-emerald-800 text-white rounded font-bold text-xs shadow-sm"
-                      >
-                        Mark Confirmed
-                      </button>
+                {unconfirmedTxns.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="p-6 text-center text-slate-400">
+                      No unconfirmed amounts found. All user transactions have verified confirmed values.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  unconfirmedTxns.map(t => (
+                    <tr key={t.id} className="hover:bg-slate-50">
+                      <td className="p-3 font-bold text-rose-900 font-mono">{t.id}</td>
+                      <td className="p-3 text-slate-600 whitespace-nowrap">{formatDisplayDate(t.date_of_transaction)}</td>
+                      <td className="p-3 font-semibold text-slate-900">
+                        {partiesMap.get(t.party_id || '')?.system_name || t.party_name_raw}
+                      </td>
+                      <td className="p-3 text-right font-mono font-bold text-slate-900 tabular-nums">
+                        {formatCurrencyAmount(t.amount, t.currency)}
+                      </td>
+                      <td className="p-3 text-slate-600 max-w-[200px] truncate">{t.description || '—'}</td>
+                      <td className="p-3 text-right space-x-2 whitespace-nowrap">
+                        <button
+                          onClick={() => setSelectedBoardTxn(t)}
+                          className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-semibold text-xs cursor-pointer"
+                        >
+                          Board
+                        </button>
+                        <button
+                          onClick={() => handleConfirmAmount(t.id)}
+                          className="px-2.5 py-1 bg-emerald-700 hover:bg-emerald-800 text-white rounded font-bold text-xs shadow-sm cursor-pointer"
+                        >
+                          Mark Confirmed
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -176,7 +201,7 @@ export const DiscrepanciesModule: React.FC<{ onNavigateToMatch?: () => void }> =
                 Transactions Closed with verified_with_bank = No ({unverifiedTxns.length})
               </h3>
               <span className="text-[11px] text-slate-500">
-                Team proceeded without bank data; cross-check against physical statements when available
+                Team proceeded without bank data; cross-check against physical statements or move to open to query
               </span>
             </div>
           </div>
@@ -194,33 +219,80 @@ export const DiscrepanciesModule: React.FC<{ onNavigateToMatch?: () => void }> =
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {unverifiedTxns.map(t => (
-                  <tr key={t.id} className="hover:bg-slate-50">
-                    <td className="p-3 font-bold text-rose-900">{t.id}</td>
-                    <td className="p-3 text-slate-600">{t.date_of_transaction}</td>
-                    <td className="p-3 font-semibold text-slate-900">
-                      {partiesMap.get(t.party_id || '')?.system_name || t.party_name_raw}
-                    </td>
-                    <td className="p-3 text-right font-mono font-bold text-slate-900 tabular-nums">
-                      {t.currency} {t.amount.toFixed(2)}
-                    </td>
-                    <td className="p-3 uppercase font-bold text-amber-800 text-[10px]">{t.status}</td>
-                    <td className="p-3 text-right space-x-2">
-                      <button
-                        onClick={() => setSelectedBoardTxn(t)}
-                        className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-semibold text-xs"
-                      >
-                        Board
-                      </button>
-                      <button
-                        onClick={() => handleVerifyBank(t.id)}
-                        className="px-2.5 py-1 bg-emerald-700 hover:bg-emerald-800 text-white rounded font-bold text-xs shadow-sm"
-                      >
-                        Set Verified: Yes
-                      </button>
+                {unverifiedTxns.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="p-6 text-center text-slate-400">
+                      No unverified transactions found.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  unverifiedTxns.map(t => (
+                    <React.Fragment key={t.id}>
+                      <tr className="hover:bg-slate-50">
+                        <td className="p-3 font-bold text-rose-900 font-mono">{t.id}</td>
+                        <td className="p-3 text-slate-600 whitespace-nowrap">{formatDisplayDate(t.date_of_transaction)}</td>
+                        <td className="p-3 font-semibold text-slate-900">
+                          {partiesMap.get(t.party_id || '')?.system_name || t.party_name_raw}
+                        </td>
+                        <td className="p-3 text-right font-mono font-bold text-slate-900 tabular-nums">
+                          {formatCurrencyAmount(t.amount, t.currency)}
+                        </td>
+                        <td className="p-3 uppercase font-bold text-amber-800 text-[10px]">{t.status.replace('_', ' ')}</td>
+                        <td className="p-3 text-right space-x-2 whitespace-nowrap">
+                          <button
+                            onClick={() => setSelectedBoardTxn(t)}
+                            className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-semibold text-xs cursor-pointer"
+                          >
+                            Board
+                          </button>
+                          <button
+                            onClick={() => setQueryInputTxnId(queryInputTxnId === t.id ? null : t.id)}
+                            className="px-2.5 py-1 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded font-semibold text-xs cursor-pointer"
+                          >
+                            Move to Open (Query)
+                          </button>
+                          <button
+                            onClick={() => handleVerifyBank(t.id)}
+                            className="px-2.5 py-1 bg-emerald-700 hover:bg-emerald-800 text-white rounded font-bold text-xs shadow-sm cursor-pointer"
+                          >
+                            Set Verified: Yes
+                          </button>
+                        </td>
+                      </tr>
+                      {queryInputTxnId === t.id && (
+                        <tr className="bg-amber-50/70 border-b border-amber-200">
+                          <td colSpan={6} className="p-3">
+                            <div className="flex items-center space-x-2">
+                              <MessageSquarePlus className="w-4 h-4 text-amber-700 shrink-0" />
+                              <input
+                                type="text"
+                                value={queryComment}
+                                onChange={e => setQueryComment(e.target.value)}
+                                placeholder="Enter query reason for moving back to Open..."
+                                className="flex-1 bg-white border border-amber-300 rounded-lg px-3 py-1.5 text-xs text-slate-900 focus:outline-none"
+                              />
+                              <button
+                                onClick={() => handleMoveToOpenWithQuery(t.id)}
+                                className="px-3 py-1.5 bg-amber-700 hover:bg-amber-800 text-white rounded-lg font-bold text-xs shadow-xs cursor-pointer"
+                              >
+                                Submit & Move to Open
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setQueryInputTxnId(null);
+                                  setQueryComment('');
+                                }}
+                                className="px-2.5 py-1.5 text-slate-500 hover:text-slate-800 text-xs font-semibold cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -254,24 +326,32 @@ export const DiscrepanciesModule: React.FC<{ onNavigateToMatch?: () => void }> =
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
-                {unlinkedBankTxns.map(b => (
-                  <tr key={b.id} className="hover:bg-blue-50/50">
-                    <td className="p-3 font-bold text-blue-900">{b.id}</td>
-                    <td className="p-3 text-slate-600">{b.value_date}</td>
-                    <td className="p-3 text-slate-800 font-sans max-w-[280px] truncate" title={b.narration}>
-                      {b.narration}
-                    </td>
-                    <td className="p-3 text-right text-rose-700 tabular-nums">
-                      {b.debit > 0 ? `-${b.debit.toFixed(2)}` : '—'}
-                    </td>
-                    <td className="p-3 text-right text-emerald-700 tabular-nums">
-                      {b.credit > 0 ? `+${b.credit.toFixed(2)}` : '—'}
-                    </td>
-                    <td className="p-3 text-right font-bold text-slate-900 tabular-nums">
-                      {b.balance_after ? b.balance_after.toFixed(2) : '—'}
+                {unlinkedBankTxns.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="p-6 text-center text-slate-400 font-sans">
+                      All bank statement entries are linked to user transactions.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  unlinkedBankTxns.map(b => (
+                    <tr key={b.id} className="hover:bg-blue-50/50">
+                      <td className="p-3 font-bold text-blue-900">{b.id}</td>
+                      <td className="p-3 text-slate-600 font-sans whitespace-nowrap">{formatDisplayDate(b.value_date)}</td>
+                      <td className="p-3 text-slate-800 font-sans max-w-[280px] truncate" title={b.narration}>
+                        {b.narration}
+                      </td>
+                      <td className="p-3 text-right text-rose-700 tabular-nums">
+                        {b.debit > 0 ? `-${b.debit.toFixed(2)}` : '—'}
+                      </td>
+                      <td className="p-3 text-right text-emerald-700 tabular-nums">
+                        {b.credit > 0 ? `+${b.credit.toFixed(2)}` : '—'}
+                      </td>
+                      <td className="p-3 text-right font-bold text-slate-900 tabular-nums">
+                        {b.balance_after ? b.balance_after.toFixed(2) : '—'}
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -284,7 +364,6 @@ export const DiscrepanciesModule: React.FC<{ onNavigateToMatch?: () => void }> =
           onClose={() => setSelectedBoardTxn(null)}
         />
       )}
-
     </div>
   );
 };

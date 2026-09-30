@@ -1,40 +1,130 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
-import { Landmark, Upload, CheckCircle, AlertCircle, FileSpreadsheet } from 'lucide-react';
+import { resolvePartyFromNarration, normalizeAlias } from '../../lib/alias';
+import { getDaysDifference } from '../../lib/matching';
+import { formatDisplayDate, formatCurrencyAmount } from '../../lib/formatters';
+import {
+  Landmark,
+  AlertCircle,
+  CheckCircle2,
+  Building2,
+  CreditCard,
+  RefreshCw,
+  Trash2,
+  Search,
+  ArrowDownLeft,
+  ArrowUpRight,
+  ShieldAlert,
+  Sparkles,
+  Filter,
+} from 'lucide-react';
 
 export const BankEntryModule: React.FC = () => {
   const {
+    allowedCompanies,
+    companies,
     accounts,
     scopedAccounts,
+    parties,
+    partyAliases,
+    bankTransactions,
     scopedBankTransactions,
     addBankTransaction,
+    deleteBankTransactionsBatch,
     activeCompanyId,
   } = useApp();
 
-  const [selectedAccountId, setSelectedAccountId] = useState(scopedAccounts[0]?.id || '');
-  const [valueDate, setValueDate] = useState(new Date().toISOString().slice(0, 10));
+  // --------------------------------------------------------------------------
+  // CASCADING COMPANY & ACCOUNT SELECTION
+  // --------------------------------------------------------------------------
+  const initialCompany = activeCompanyId !== 'ALL'
+    ? activeCompanyId
+    : (allowedCompanies[0]?.id || 'COM1');
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string>(initialCompany);
 
-  // Sync selectedAccountId when scopedAccounts changes
-  React.useEffect(() => {
-    if (scopedAccounts.length > 0 && !scopedAccounts.some(a => a.id === selectedAccountId)) {
-      setSelectedAccountId(scopedAccounts[0].id);
+  useEffect(() => {
+    if (activeCompanyId !== 'ALL') {
+      setSelectedCompanyId(activeCompanyId);
+    } else if (allowedCompanies.length > 0 && !allowedCompanies.some(c => c.id === selectedCompanyId)) {
+      setSelectedCompanyId(allowedCompanies[0].id);
     }
-  }, [scopedAccounts, selectedAccountId]);
-  const [narration, setNarration] = useState('');
-  const [description, setDescription] = useState('');
-  const [referenceNo, setReferenceNo] = useState('');
-  const [debitAmount, setDebitAmount] = useState('');
-  const [creditAmount, setCreditAmount] = useState('');
-  const [balanceAfter, setBalanceAfter] = useState('');
-  const [feedback, setFeedback] = useState<string | null>(null);
+  }, [activeCompanyId, allowedCompanies, selectedCompanyId]);
+
+  const companyAccounts = useMemo(() => {
+    return scopedAccounts.filter(a => a.company_id === selectedCompanyId);
+  }, [scopedAccounts, selectedCompanyId]);
+
+  const [selectedAccountId, setSelectedAccountId] = useState<string>(
+    companyAccounts[0]?.id || scopedAccounts[0]?.id || ''
+  );
+
+  useEffect(() => {
+    if (companyAccounts.length > 0) {
+      if (!companyAccounts.some(a => a.id === selectedAccountId)) {
+        setSelectedAccountId(companyAccounts[0].id);
+      }
+    } else {
+      setSelectedAccountId('');
+    }
+  }, [companyAccounts, selectedAccountId]);
 
   const activeAccount = accounts.find(a => a.id === selectedAccountId);
   const currency = activeAccount?.account_currency || 'INR';
 
+  // --------------------------------------------------------------------------
+  // FORM STATE
+  // --------------------------------------------------------------------------
+  const [valueDate, setValueDate] = useState(new Date().toISOString().slice(0, 10));
+  const [direction, setDirection] = useState<'Payment' | 'Receipt'>('Payment');
+  const [amount, setAmount] = useState<string>('');
+  const [narration, setNarration] = useState('');
+  const [description, setDescription] = useState('');
+  const [referenceNo, setReferenceNo] = useState('');
+  const [balanceAfter, setBalanceAfter] = useState('');
+  const [feedback, setFeedback] = useState<string | null>(null);
+
+  // --------------------------------------------------------------------------
+  // LIVE PARTY NARRATION AUTO-DETECTION
+  // --------------------------------------------------------------------------
+  const resolvedPartyInfo = useMemo(() => {
+    if (!narration.trim()) return null;
+    return resolvePartyFromNarration(narration, parties, partyAliases);
+  }, [narration, parties, partyAliases]);
+
+  // --------------------------------------------------------------------------
+  // LIVE DUPLICATE SCANNER (±7 Days Window, Same Account, Same Direction & Amount)
+  // --------------------------------------------------------------------------
+  const liveDuplicates = useMemo(() => {
+    const numAmount = parseFloat(amount);
+    if (!valueDate || isNaN(numAmount) || numAmount <= 0 || !selectedAccountId) return [];
+
+    return scopedBankTransactions.filter(b => {
+      if (b.account_id !== selectedAccountId) return false;
+
+      // Check Direction
+      const isPayment = b.debit > 0 && b.credit === 0;
+      const isReceipt = b.credit > 0 && b.debit === 0;
+      if (direction === 'Payment' && !isPayment) return false;
+      if (direction === 'Receipt' && !isReceipt) return false;
+
+      // ±7 Days window
+      const daysDiff = getDaysDifference(valueDate, b.value_date);
+      if (daysDiff > 7) return false;
+
+      // Amount matching (within 5 tolerance)
+      const bAmount = direction === 'Payment' ? b.debit : b.credit;
+      const amountMatches = Math.abs(bAmount - numAmount) <= 5;
+
+      return amountMatches;
+    });
+  }, [scopedBankTransactions, selectedAccountId, direction, valueDate, amount]);
+
+  // --------------------------------------------------------------------------
+  // FORM SUBMISSION
+  // --------------------------------------------------------------------------
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const debit = parseFloat(debitAmount) || 0;
-    const credit = parseFloat(creditAmount) || 0;
+    const numAmount = parseFloat(amount) || 0;
 
     if (!selectedAccountId) {
       setFeedback('Error: Please select a bank account.');
@@ -44,13 +134,17 @@ export const BankEntryModule: React.FC = () => {
       setFeedback('Error: Statement narration printed by bank is required.');
       return;
     }
-    if (debit <= 0 && credit <= 0) {
-      setFeedback('Error: Enter either Debit or Credit amount.');
+    if (numAmount <= 0) {
+      setFeedback('Error: Please enter a valid transaction amount.');
       return;
     }
 
+    const debit = direction === 'Payment' ? numAmount : 0;
+    const credit = direction === 'Receipt' ? numAmount : 0;
+
     const newTxn = addBankTransaction({
       account_id: selectedAccountId,
+      party_id: resolvedPartyInfo?.party?.id,
       value_date: valueDate,
       narration: narration.trim(),
       description: description.trim() || undefined,
@@ -66,14 +160,64 @@ export const BankEntryModule: React.FC = () => {
     setNarration('');
     setDescription('');
     setReferenceNo('');
-    setDebitAmount('');
-    setCreditAmount('');
+    setAmount('');
     setBalanceAfter('');
     setTimeout(() => setFeedback(null), 4000);
   };
 
+  // --------------------------------------------------------------------------
+  // TABLE SEARCH & BULK SELECTION
+  // --------------------------------------------------------------------------
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedTxnIds, setSelectedTxnIds] = useState<Set<string>>(new Set());
+
+  const filteredTransactions = useMemo(() => {
+    return scopedBankTransactions.filter(b => {
+      if (!searchQuery.trim()) return true;
+      const q = searchQuery.toLowerCase();
+      const inId = b.id.toLowerCase().includes(q);
+      const inNarration = b.narration.toLowerCase().includes(q);
+      const inRef = b.reference_no?.toLowerCase().includes(q);
+      const inDesc = b.description?.toLowerCase().includes(q);
+      const party = b.party_id ? parties.find(p => p.id === b.party_id) : undefined;
+      const inParty = Boolean(
+        (party?.system_name && party.system_name.toLowerCase().includes(q)) ||
+        (party?.id && party.id.toLowerCase().includes(q))
+      );
+      return inId || inNarration || inRef || inDesc || inParty;
+    });
+  }, [scopedBankTransactions, searchQuery, parties]);
+
+  const handleToggleSelectAll = () => {
+    if (selectedTxnIds.size === filteredTransactions.length && filteredTransactions.length > 0) {
+      setSelectedTxnIds(new Set());
+    } else {
+      setSelectedTxnIds(new Set(filteredTransactions.map(t => t.id)));
+    }
+  };
+
+  const handleToggleSelectRow = (id: string) => {
+    setSelectedTxnIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleBulkDelete = () => {
+    if (selectedTxnIds.size === 0) return;
+    if (window.confirm(`Are you sure you want to delete ${selectedTxnIds.size} selected bank transactions?`)) {
+      deleteBankTransactionsBatch(Array.from(selectedTxnIds));
+      setFeedback(`Successfully deleted ${selectedTxnIds.size} bank transactions.`);
+      setSelectedTxnIds(new Set());
+      setTimeout(() => setFeedback(null), 4000);
+    }
+  };
+
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
         <div className="flex items-center space-x-3">
           <span className="p-2 bg-blue-50 text-blue-700 rounded-lg">
@@ -82,16 +226,18 @@ export const BankEntryModule: React.FC = () => {
           <div>
             <h1 className="text-xl font-bold font-serif text-slate-900">Bank Statement Transactions</h1>
             <p className="text-xs text-slate-500">
-              Supporting Data only &bull; Printed bank lines kept verbatim without altering raw narration
+              Supporting Data only &bull; Printed bank lines kept verbatim without altering raw narration &bull; Auto-detects parties
             </p>
           </div>
         </div>
       </div>
 
       {feedback && (
-        <div className={`p-3 rounded-lg text-xs font-semibold ${
-          feedback.startsWith('Error') ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
-        }`}>
+        <div
+          className={`p-3 rounded-lg text-xs font-semibold ${
+            feedback.startsWith('Error') ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
+          }`}
+        >
           {feedback}
         </div>
       )}
@@ -99,168 +245,382 @@ export const BankEntryModule: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Form (5 Cols) */}
         <div className="lg:col-span-5 bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
-          <h2 className="text-xs font-bold uppercase tracking-wider text-blue-900 border-b pb-2">
-            Add Statement Line
+          <h2 className="text-xs font-bold uppercase tracking-wider text-blue-900 border-b pb-2 flex items-center justify-between">
+            <span>Add Statement Line</span>
+            <span className="text-[11px] font-normal text-slate-500">Manual Entry</span>
           </h2>
 
-          <form onSubmit={handleSubmit} className="space-y-3">
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Cascading Company */}
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Bank Account</label>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1 flex items-center space-x-1">
+                <Building2 className="w-3.5 h-3.5 text-slate-400" />
+                <span>Operating Entity / Company</span>
+              </label>
+              <select
+                value={selectedCompanyId}
+                onChange={e => setSelectedCompanyId(e.target.value)}
+                disabled={activeCompanyId !== 'ALL'}
+                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none disabled:opacity-60 cursor-pointer"
+              >
+                {allowedCompanies.map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.id} &bull; {c.full_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Cascading Bank Account */}
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1 flex items-center space-x-1">
+                <CreditCard className="w-3.5 h-3.5 text-slate-400" />
+                <span>Bank Account</span>
+              </label>
               <select
                 value={selectedAccountId}
                 onChange={e => setSelectedAccountId(e.target.value)}
-                disabled={scopedAccounts.length === 0}
-                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs disabled:opacity-60"
+                disabled={companyAccounts.length === 0}
+                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none disabled:opacity-60 cursor-pointer"
               >
-                {scopedAccounts.length === 0 ? (
-                  <option value="">No bank accounts available</option>
+                {companyAccounts.length === 0 ? (
+                  <option value="">No accounts available for selected company</option>
                 ) : (
-                  scopedAccounts.map(acc => (
+                  companyAccounts.map(acc => (
                     <option key={acc.id} value={acc.id}>
-                      {acc.id} &bull; {acc.bank_name} ({acc.account_currency})
+                      {acc.id} &bull; {acc.bank_name} ({acc.account_currency}) &bull; {acc.account_number}
                     </option>
                   ))
                 )}
               </select>
             </div>
 
+            {/* Direction Toggle: Payment (Debit) vs Receipt (Credit) */}
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Value Date</label>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5">
+                Transaction Direction
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDirection('Payment')}
+                  className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center space-x-2 border transition cursor-pointer ${
+                    direction === 'Payment'
+                      ? 'bg-rose-50 border-rose-300 text-rose-700 shadow-xs'
+                      : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  <ArrowDownLeft className="w-4 h-4 text-rose-600" />
+                  <span>Payment (Debit)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDirection('Receipt')}
+                  className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center space-x-2 border transition cursor-pointer ${
+                    direction === 'Receipt'
+                      ? 'bg-emerald-50 border-emerald-300 text-emerald-700 shadow-xs'
+                      : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  <ArrowUpRight className="w-4 h-4 text-emerald-600" />
+                  <span>Receipt (Credit)</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Amount */}
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                Amount ({currency}) <span className="text-rose-600">*</span>
+              </label>
+              <div className="relative">
+                <span className="absolute left-3 top-2 text-xs font-bold text-slate-400 font-mono">
+                  {currency}
+                </span>
+                <input
+                  type="number"
+                  step="0.01"
+                  required
+                  value={amount}
+                  onChange={e => setAmount(e.target.value)}
+                  placeholder="0.00"
+                  className="w-full bg-slate-50 border border-slate-300 rounded-lg pl-14 pr-3 py-2 text-xs font-mono font-bold text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
+              </div>
+              <span className="text-[10px] text-slate-400 block mt-0.5">
+                Bank statement amounts are always confirmed by default.
+              </span>
+            </div>
+
+            {/* Value Date */}
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1 flex items-center justify-between">
+                <span>Value Date <span className="text-rose-600">*</span></span>
+                {valueDate && (
+                  <span className="text-[10px] font-mono font-medium text-blue-600">
+                    {formatDisplayDate(valueDate)}
+                  </span>
+                )}
+              </label>
               <input
                 type="date"
+                required
                 value={valueDate}
                 onChange={e => setValueDate(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs"
+                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none cursor-pointer"
               />
             </div>
 
+            {/* Printed Narration & Auto-Detect Party */}
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
                 Printed Narration <span className="text-rose-600">*</span>
               </label>
               <input
                 type="text"
+                required
                 value={narration}
                 onChange={e => setNarration(e.target.value)}
                 placeholder="Exact statement line printed by the bank"
-                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono"
+                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
               />
-              <span className="text-[10px] text-slate-400 block mt-0.5">Kept verbatim forever (never aliased).</span>
+              <span className="text-[10px] text-slate-400 block mt-0.5">
+                Kept verbatim forever (never aliased).
+              </span>
+
+              {/* Live Party Resolution Feedback */}
+              {resolvedPartyInfo?.party ? (
+                <div className="mt-2 p-2 bg-emerald-50 border border-emerald-200 rounded-lg flex items-center space-x-2 text-xs text-emerald-800">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <div>
+                    <span className="font-bold">Auto-matched Party:</span>{' '}
+                    <span className="font-semibold">{resolvedPartyInfo.party.system_name}</span>{' '}
+                    <span className="text-emerald-600 font-mono text-[10px]">({resolvedPartyInfo.party.id})</span>{' '}
+                    <span className="text-[10px] text-emerald-600">
+                      via {resolvedPartyInfo.matchedBy === 'system_name' ? 'System Name' : 'Learned Alias'}
+                    </span>
+                  </div>
+                </div>
+              ) : narration.trim().length >= 3 ? (
+                <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded-lg flex items-center space-x-2 text-xs text-amber-800">
+                  <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
+                  <div className="text-[11px]">
+                    <span className="font-bold">New Narration detected:</span> will auto-register as an unmapped alias to learn for future transactions.
+                  </div>
+                </div>
+              ) : null}
             </div>
 
+            {/* Internal Note (Description) */}
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Internal Note (Description)</label>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                Internal Note (Description)
+              </label>
               <input
                 type="text"
                 value={description}
                 onChange={e => setDescription(e.target.value)}
                 placeholder="Our internal note (typed separately)"
-                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs"
+                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
               />
             </div>
 
+            {/* Reference / UTR */}
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Reference / UTR / Cheque #</label>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                Reference / UTR / Cheque #
+              </label>
               <input
                 type="text"
                 value={referenceNo}
                 onChange={e => setReferenceNo(e.target.value)}
-                placeholder="UTR / Cheque number"
-                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs"
+                placeholder="UTR or Cheque number"
+                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Debit (Money Out)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={debitAmount}
-                  onChange={e => {
-                    setDebitAmount(e.target.value);
-                    if (e.target.value) setCreditAmount('');
-                  }}
-                  placeholder="0.00"
-                  className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono font-bold"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Credit (Money In)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={creditAmount}
-                  onChange={e => {
-                    setCreditAmount(e.target.value);
-                    if (e.target.value) setDebitAmount('');
-                  }}
-                  placeholder="0.00"
-                  className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono font-bold"
-                />
-              </div>
-            </div>
-
+            {/* Balance After */}
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Balance After (Optional)</label>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                Balance After (Optional)
+              </label>
               <input
                 type="number"
                 step="0.01"
                 value={balanceAfter}
                 onChange={e => setBalanceAfter(e.target.value)}
                 placeholder="Running balance printed on statement"
-                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono"
+                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono focus:ring-2 focus:ring-blue-500 focus:outline-none"
               />
             </div>
 
+            {/* LIVE DUPLICATE WARNING CARD */}
+            {liveDuplicates.length > 0 && (
+              <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl space-y-2 text-xs">
+                <div className="flex items-center space-x-2 text-amber-900 font-bold">
+                  <ShieldAlert className="w-4 h-4 text-amber-600" />
+                  <span>Live Duplicate Scanner Warning ({liveDuplicates.length} found)</span>
+                </div>
+                <p className="text-[11px] text-amber-800">
+                  Existing bank transaction with matching amount ({formatCurrencyAmount(parseFloat(amount), currency)}) found within ±7 days:
+                </p>
+                <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1">
+                  {liveDuplicates.map(d => (
+                    <div key={d.id} className="p-2 bg-white/80 rounded border border-amber-200 text-[11px] flex justify-between items-center">
+                      <div>
+                        <span className="font-mono font-bold text-amber-900">{d.id}</span> &bull; {formatDisplayDate(d.value_date)}
+                        <p className="text-slate-600 truncate max-w-[200px]">{d.narration}</p>
+                      </div>
+                      <span className="font-mono font-bold text-slate-900">
+                        {formatCurrencyAmount(d.debit > 0 ? d.debit : d.credit, d.currency)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <button
               type="submit"
-              className="w-full py-2 bg-blue-700 hover:bg-blue-800 text-white font-bold text-xs rounded-lg shadow-sm"
+              className="w-full py-2.5 bg-blue-700 hover:bg-blue-800 text-white font-bold text-xs rounded-lg shadow-sm transition flex items-center justify-center space-x-2 cursor-pointer"
             >
-              Save Bank Statement Entry
+              <span>Save Bank Statement Entry</span>
             </button>
           </form>
         </div>
 
         {/* Table of Statement Entries (7 Cols) */}
         <div className="lg:col-span-7 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-          <div className="p-4 border-b border-slate-200 flex items-center justify-between">
-            <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Statement Lines ({scopedBankTransactions.length})</h3>
-            <span className="text-[11px] text-slate-500">Supporting bank records</span>
+          {/* Table Header and Search */}
+          <div className="p-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center space-x-2">
+                <span>Statement Lines ({filteredTransactions.length})</span>
+                {scopedBankTransactions.length !== filteredTransactions.length && (
+                  <span className="text-[11px] text-slate-400 font-normal">
+                    (filtered from {scopedBankTransactions.length})
+                  </span>
+                )}
+              </h3>
+              <span className="text-[11px] text-slate-500">Supporting bank statement records</span>
+            </div>
+
+            <div className="relative w-full sm:w-64">
+              <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="Search narration, ref, ID..."
+                className="w-full pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              />
+            </div>
           </div>
 
+          {/* Bulk Action Bar */}
+          {selectedTxnIds.size > 0 && (
+            <div className="bg-rose-50 border-b border-rose-200 p-2.5 px-4 flex items-center justify-between text-xs animate-in fade-in">
+              <span className="font-bold text-rose-950">
+                {selectedTxnIds.size} statement line{selectedTxnIds.size > 1 ? 's' : ''} selected
+              </span>
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedTxnIds(new Set())}
+                  className="px-2.5 py-1 text-slate-600 hover:bg-slate-200/60 rounded font-medium cursor-pointer"
+                >
+                  Deselect All
+                </button>
+                <button
+                  type="button"
+                  onClick={handleBulkDelete}
+                  className="px-3 py-1 bg-rose-700 hover:bg-rose-800 text-white rounded-lg font-bold shadow-xs flex items-center space-x-1 cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete Selected</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Table Data */}
           <div className="overflow-x-auto flex-1">
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-50 text-slate-600 uppercase font-bold text-[10px] border-b">
                 <tr>
+                  <th className="p-3 w-8">
+                    <input
+                      type="checkbox"
+                      checked={selectedTxnIds.size === filteredTransactions.length && filteredTransactions.length > 0}
+                      onChange={handleToggleSelectAll}
+                      className="rounded text-blue-700 focus:ring-blue-500 cursor-pointer"
+                    />
+                  </th>
                   <th className="p-3">ID</th>
-                  <th className="p-3">Date</th>
-                  <th className="p-3">Narration</th>
-                  <th className="p-3 text-right">Debit</th>
-                  <th className="p-3 text-right">Credit</th>
+                  <th className="p-3">Value Date</th>
+                  <th className="p-3">Narration & Notes</th>
+                  <th className="p-3">Matched Party</th>
+                  <th className="p-3 text-right">Debit (-)</th>
+                  <th className="p-3 text-right">Credit (+)</th>
                   <th className="p-3 text-right">Balance</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
-                {scopedBankTransactions.map(b => (
-                  <tr key={b.id} className="hover:bg-blue-50/50">
-                    <td className="p-3 font-bold text-blue-900">{b.id}</td>
-                    <td className="p-3 text-slate-600">{b.value_date}</td>
-                    <td className="p-3 max-w-[220px] truncate text-slate-800 font-sans" title={b.narration}>
-                      {b.narration}
-                    </td>
-                    <td className="p-3 text-right text-rose-700 tabular-nums">
-                      {b.debit > 0 ? `-${b.debit.toFixed(2)}` : '—'}
-                    </td>
-                    <td className="p-3 text-right text-emerald-700 tabular-nums">
-                      {b.credit > 0 ? `+${b.credit.toFixed(2)}` : '—'}
-                    </td>
-                    <td className="p-3 text-right font-bold text-slate-900 tabular-nums">
-                      {b.balance_after ? b.balance_after.toFixed(2) : '—'}
+                {filteredTransactions.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="p-6 text-center text-slate-400 font-sans">
+                      No bank statement entries found.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  filteredTransactions.map(b => {
+                    const party = b.party_id ? parties.find(p => p.id === b.party_id) : undefined;
+                    const isSelected = selectedTxnIds.has(b.id);
+                    return (
+                      <tr key={b.id} className={`hover:bg-blue-50/50 ${isSelected ? 'bg-blue-50/70' : ''}`}>
+                        <td className="p-3">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => handleToggleSelectRow(b.id)}
+                            className="rounded text-blue-700 focus:ring-blue-500 cursor-pointer"
+                          />
+                        </td>
+                        <td className="p-3 font-bold text-blue-900">{b.id}</td>
+                        <td className="p-3 text-slate-600 font-sans whitespace-nowrap">
+                          {formatDisplayDate(b.value_date)}
+                        </td>
+                        <td className="p-3 max-w-[200px] text-slate-800 font-sans" title={b.narration}>
+                          <div className="truncate font-medium">{b.narration}</div>
+                          {b.description && (
+                            <div className="text-[10px] text-slate-400 truncate">{b.description}</div>
+                          )}
+                          {b.reference_no && (
+                            <div className="text-[10px] text-blue-600 font-mono truncate">Ref: {b.reference_no}</div>
+                          )}
+                        </td>
+                        <td className="p-3 font-sans">
+                          {party ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                              {party.system_name}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-slate-400 italic">Unmapped</span>
+                          )}
+                        </td>
+                        <td className="p-3 text-right text-rose-700 tabular-nums">
+                          {b.debit > 0 ? `-${b.debit.toFixed(2)}` : '—'}
+                        </td>
+                        <td className="p-3 text-right text-emerald-700 tabular-nums">
+                          {b.credit > 0 ? `+${b.credit.toFixed(2)}` : '—'}
+                        </td>
+                        <td className="p-3 text-right font-bold text-slate-900 tabular-nums">
+                          {b.balance_after ? b.balance_after.toFixed(2) : '—'}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>

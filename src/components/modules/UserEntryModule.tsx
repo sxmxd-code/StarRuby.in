@@ -3,6 +3,8 @@ import { useApp } from '../../context/AppContext';
 import { UserTransaction, Party, Account } from '../../types/database';
 import { normalizeAlias } from '../../lib/alias';
 import { getDaysDifference } from '../../lib/matching';
+import { formatDisplayDate } from '../../lib/formatters';
+import { uploadToR2, getR2DownloadUrl } from '../../lib/storage';
 import { SlideOverDrawer } from '../common/SlideOverDrawer';
 import {
   ArrowDownLeft,
@@ -26,6 +28,7 @@ import {
   CreditCard,
   UserCheck,
   X,
+  Paperclip,
 } from 'lucide-react';
 import { TransactionBoardModal } from './TransactionBoardModal';
 
@@ -46,6 +49,9 @@ export const UserEntryModule: React.FC = () => {
     addUserTransactionsBatch,
     updateUserTransaction,
     deleteUserTransaction,
+    deleteUserTransactionsBatch,
+    documents,
+    attachDocument,
     addParty,
     activeCompanyId,
     currentUser,
@@ -131,11 +137,15 @@ export const UserEntryModule: React.FC = () => {
   // 6. Description & Reusable Templates
   const [description, setDescription] = useState('');
   const [saveAsTemplate, setSaveAsTemplate] = useState(false);
+  const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
 
   // 7. Multi-Currency Exchange Rate
   const [exchangeRate, setExchangeRate] = useState<string>('');
   const [isRateManuallyEdited, setIsRateManuallyEdited] = useState<boolean>(false);
   const [formFeedback, setFormFeedback] = useState<string | null>(null);
+
+  // 8. Bulk Selection
+  const [selectedTxnIds, setSelectedTxnIds] = useState<Set<string>>(new Set());
 
   // Active selected Account
   const activeAccount = useMemo(() => {
@@ -326,12 +336,57 @@ export const UserEntryModule: React.FC = () => {
       source: 'manual',
     });
 
+    if (attachmentFile) {
+      const fileToUpload = attachmentFile;
+      uploadToR2(fileToUpload, 'documents', newTxn.id)
+        .then(res => {
+          attachDocument({
+            file_name: fileToUpload.name,
+            r2_bucket: res.bucket,
+            r2_object_key: res.objectKey,
+            content_type: fileToUpload.type || 'application/pdf',
+            size_bytes: res.sizeBytes,
+            doc_type: 'invoice',
+            user_txn_id: newTxn.id,
+          });
+        })
+        .catch(err => console.error('R2 invoice upload error:', err));
+      setAttachmentFile(null);
+    }
+
     setFormFeedback(`Success: Transaction ${newTxn.id} recorded successfully! (Next: ${newTxn.id.replace(/\d+/, n => String(Number(n) + 1))})`);
     setAmount('');
     setDescription('');
     setSaveAsTemplate(false);
     setIsRateManuallyEdited(false);
     setTimeout(() => setFormFeedback(null), 5000);
+  };
+
+  const handleToggleSelectAll = () => {
+    if (selectedTxnIds.size === filteredTransactions.length && filteredTransactions.length > 0) {
+      setSelectedTxnIds(new Set());
+    } else {
+      setSelectedTxnIds(new Set(filteredTransactions.map(t => t.id)));
+    }
+  };
+
+  const handleToggleSelectRow = (id: string) => {
+    setSelectedTxnIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleBulkDelete = () => {
+    if (selectedTxnIds.size === 0) return;
+    if (window.confirm(`Are you sure you want to delete ${selectedTxnIds.size} selected transactions?`)) {
+      deleteUserTransactionsBatch(Array.from(selectedTxnIds));
+      setFormFeedback(`Successfully deleted ${selectedTxnIds.size} transactions.`);
+      setSelectedTxnIds(new Set());
+      setTimeout(() => setFormFeedback(null), 4000);
+    }
   };
 
   // --------------------------------------------------------------------------
@@ -1033,6 +1088,41 @@ export const UserEntryModule: React.FC = () => {
               )}
             </div>
 
+            {/* Direct Invoice / Receipt Attachment */}
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                Attach Invoice / Receipt / Voucher <span className="text-[10px] text-slate-400 font-normal lowercase">(optional)</span>
+              </label>
+              <div className="flex items-center space-x-2">
+                <input
+                  type="file"
+                  id="userTxnFormAttachment"
+                  onChange={e => setAttachmentFile(e.target.files?.[0] || null)}
+                  className="hidden"
+                  accept=".pdf,.png,.jpg,.jpeg,.csv,.xlsx"
+                />
+                <label
+                  htmlFor="userTxnFormAttachment"
+                  className="py-2 px-3 bg-slate-50 hover:bg-slate-100 border border-slate-300 rounded-lg text-xs font-medium text-slate-700 cursor-pointer flex items-center space-x-2 transition"
+                >
+                  <Paperclip className="w-3.5 h-3.5 text-slate-500" />
+                  <span className="truncate max-w-[200px]">
+                    {attachmentFile ? attachmentFile.name : 'Choose File (PDF, PNG, JPG, CSV)'}
+                  </span>
+                </label>
+                {attachmentFile && (
+                  <button
+                    type="button"
+                    onClick={() => setAttachmentFile(null)}
+                    className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg transition cursor-pointer"
+                    title="Remove attachment"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+
             {/* 12 & 13. Status & Bank Verification (Read-Only Grayed Out, Client Brief Order 12 & 13) */}
             <div className="grid grid-cols-2 gap-3 pt-1">
               <div>
@@ -1236,11 +1326,45 @@ export const UserEntryModule: React.FC = () => {
           </div>
         </div>
 
+        {/* Bulk Action Bar */}
+        {selectedTxnIds.size > 0 && (
+          <div className="bg-rose-50 border border-rose-200 p-2.5 px-4 rounded-xl flex items-center justify-between text-xs animate-in fade-in">
+            <span className="font-bold text-rose-950">
+              {selectedTxnIds.size} transaction{selectedTxnIds.size > 1 ? 's' : ''} selected
+            </span>
+            <div className="flex items-center space-x-2">
+              <button
+                type="button"
+                onClick={() => setSelectedTxnIds(new Set())}
+                className="px-2.5 py-1 text-slate-600 hover:bg-slate-200/60 rounded font-medium cursor-pointer"
+              >
+                Deselect All
+              </button>
+              <button
+                type="button"
+                onClick={handleBulkDelete}
+                className="px-3 py-1 bg-rose-700 hover:bg-rose-800 text-white rounded-lg font-bold shadow-xs flex items-center space-x-1 cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Delete Selected</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Table Data */}
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50 text-slate-600 uppercase font-bold text-[10px] border-b">
               <tr>
+                <th className="p-3 w-8">
+                  <input
+                    type="checkbox"
+                    checked={selectedTxnIds.size === filteredTransactions.length && filteredTransactions.length > 0}
+                    onChange={handleToggleSelectAll}
+                    className="rounded text-rose-700 focus:ring-rose-500 cursor-pointer"
+                  />
+                </th>
                 <th className="p-3">Txn ID</th>
                 <th className="p-3">Date</th>
                 <th className="p-3">Account</th>
@@ -1256,25 +1380,34 @@ export const UserEntryModule: React.FC = () => {
             <tbody className="divide-y divide-slate-100">
               {filteredTransactions.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="p-8 text-center text-slate-500 text-xs">
+                  <td colSpan={11} className="p-8 text-center text-slate-500 text-xs">
                     No transactions match the selected filters.
                   </td>
                 </tr>
               ) : (
                 filteredTransactions.map(txn => {
                   const acc = accounts.find(a => a.id === txn.account_id);
+                  const txnDoc = documents.find(d => d.user_txn_id === txn.id);
                   return (
                     <tr
                       key={txn.id}
-                      className="hover:bg-rose-50/40 transition"
+                      className={`hover:bg-rose-50/40 transition ${selectedTxnIds.has(txn.id) ? 'bg-rose-50/60' : ''}`}
                     >
+                      <td className="p-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedTxnIds.has(txn.id)}
+                          onChange={() => handleToggleSelectRow(txn.id)}
+                          className="rounded text-rose-700 focus:ring-rose-500 cursor-pointer"
+                        />
+                      </td>
                       <td className="p-3 font-bold font-mono text-rose-900">{txn.id}</td>
-                      <td className="p-3 text-slate-600 whitespace-nowrap">{txn.date_of_transaction}</td>
+                      <td className="p-3 text-slate-600 whitespace-nowrap font-mono">{formatDisplayDate(txn.date_of_transaction)}</td>
                       <td className="p-3 text-slate-800 font-medium">
                         {acc?.bank_name} ({acc?.account_currency})
                       </td>
                       <td className="p-3 font-semibold text-slate-900">
-                        {txn.party_name_raw}
+                        {partiesMap.get(txn.party_id || '')?.system_name || txn.party_name_raw}
                       </td>
                       <td className="p-3 text-center">
                         <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
@@ -1315,7 +1448,21 @@ export const UserEntryModule: React.FC = () => {
                         </span>
                       </td>
                       <td className="p-3 text-right">
-                        <div className="flex items-center justify-end space-x-2">
+                        <div className="flex items-center justify-end space-x-1.5">
+                          {txnDoc && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const url = await getR2DownloadUrl(txnDoc.r2_bucket, txnDoc.r2_object_key);
+                                if (url && url !== '#') window.open(url, '_blank');
+                                else alert('Attachment file not found in storage');
+                              }}
+                              className="p-1 text-emerald-700 hover:text-emerald-900 hover:bg-emerald-50 rounded transition cursor-pointer"
+                              title={`View Attachment: ${txnDoc.file_name}`}
+                            >
+                              <Paperclip className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => openEditTxnDrawer(txn)}
@@ -1335,10 +1482,9 @@ export const UserEntryModule: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => {
-                              const reason = window.prompt(`Please provide a reason for deleting transaction ${txn.id}:`);
-                              if (reason && reason.trim()) {
-                                deleteUserTransaction(txn.id, reason.trim());
-                                setFormFeedback(`Transaction ${txn.id} deleted. Audit trail logged.`);
+                              if (window.confirm(`Delete transaction ${txn.id}?`)) {
+                                deleteUserTransaction(txn.id, 'Manual single delete');
+                                setFormFeedback(`Transaction ${txn.id} deleted.`);
                                 setTimeout(() => setFormFeedback(null), 4000);
                               }
                             }}

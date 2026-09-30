@@ -229,3 +229,80 @@ export function findPendingQueueMatches(
     return daysDiff <= windowDays;
   });
 }
+
+/**
+ * Finds matching candidates in User Transactions for a selected Bank Statement entry (Dual-View Reconciliation)
+ */
+export interface MatchCandidateUser {
+  userTxn: UserTransaction;
+  confidenceScore: number;
+  partyScore: number;
+  amountScore: number;
+  reasons: string[];
+}
+
+export function getMatchCandidatesForBankTxn(
+  bankTxn: BankTransaction,
+  userTxns: UserTransaction[],
+  partiesMap: Map<string, Party>,
+  windowDays = 7,
+  partyWeight = 0.6
+): MatchCandidateUser[] {
+  const candidates: MatchCandidateUser[] = [];
+  const amountWeight = 1 - partyWeight;
+  const bAmount = bankTxn.debit > 0 ? bankTxn.debit : bankTxn.credit;
+  const bDirection = bankTxn.debit > 0 ? 'Payment' : 'Receipt';
+
+  for (const u of userTxns) {
+    if (u.account_id !== bankTxn.account_id) continue;
+    if (u.direction !== bDirection) continue;
+
+    const daysDiff = getDaysDifference(u.date_of_transaction, bankTxn.value_date);
+    if (daysDiff > windowDays) continue;
+
+    // Amount Proximity Score
+    const diff = Math.abs(u.amount - bAmount);
+    let amountScore = 0;
+    const reasons: string[] = [];
+
+    if (diff === 0) {
+      amountScore = 1.0;
+      reasons.push('Exact amount match');
+    } else if (diff <= 5) {
+      amountScore = 0.95;
+      reasons.push(`Amount within ±${diff.toFixed(2)}`);
+    } else if (diff / bAmount <= 0.05) {
+      amountScore = 0.8;
+      reasons.push('Amount within 5% variance');
+    } else {
+      amountScore = Math.max(0, 1 - diff / (bAmount || 1));
+    }
+
+    // Party similarity: compare bank statement narration with party system name / raw name
+    const partyName = u.party_id ? partiesMap.get(u.party_id)?.system_name || u.party_name_raw : u.party_name_raw;
+    const partyScore = calculateTrigramSimilarity(partyName, bankTxn.narration);
+
+    if (partyScore >= 0.7) {
+      reasons.push(`High party match (${Math.round(partyScore * 100)}%)`);
+    } else if (partyScore >= 0.4) {
+      reasons.push(`Partial party name match (${Math.round(partyScore * 100)}%)`);
+    }
+
+    // Reference number check
+    if (bankTxn.reference_no && u.description?.toLowerCase().includes(bankTxn.reference_no.toLowerCase())) {
+      reasons.push(`Reference #${bankTxn.reference_no} found in description`);
+    }
+
+    const confidenceScore = Number((partyWeight * partyScore + amountWeight * amountScore).toFixed(3));
+
+    candidates.push({
+      userTxn: u,
+      confidenceScore: Math.round(confidenceScore * 100),
+      partyScore,
+      amountScore,
+      reasons,
+    });
+  }
+
+  return candidates.sort((a, b) => b.confidenceScore - a.confidenceScore);
+}

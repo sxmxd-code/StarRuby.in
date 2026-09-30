@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
 import { UserTransaction } from '../../types/database';
 import { CheckCheck, Shield, AlertCircle, CheckCircle, Clock, ArrowRight, UserCheck, ExternalLink, ShieldAlert } from 'lucide-react';
+import { formatDisplayDate } from '../../lib/formatters';
 import { TransactionBoardModal } from './TransactionBoardModal';
 import confetti from 'canvas-confetti';
 
@@ -13,6 +14,7 @@ export const ApprovalsModule: React.FC = () => {
     accounts,
     allUsers,
     submitApproval,
+    moveDiscrepancyToOpen,
     currentUser,
     currentRole,
   } = useApp();
@@ -58,10 +60,10 @@ export const ApprovalsModule: React.FC = () => {
     setTimeout(() => setFeedback(null), 5000);
   };
 
-  const handleReject = (txnId: string, layer: 2 | 3) => {
-    const reason = rejectComment[txnId] || 'Rejected by Admin';
-    const res = submitApproval(txnId, layer, 'rejected', reason);
-    setFeedback(res.message);
+  const handleMoveToOpen = (txnId: string) => {
+    const reason = rejectComment[txnId] || 'Moved to Open for review / queries';
+    moveDiscrepancyToOpen(txnId, reason);
+    setFeedback(`Transaction ${txnId} moved to Open with query recorded.`);
     setTimeout(() => setFeedback(null), 4000);
   };
 
@@ -144,7 +146,7 @@ export const ApprovalsModule: React.FC = () => {
                 <div key={txn.id} className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-slate-50 space-y-3 text-xs">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-rose-900 font-mono text-sm">{txn.id}</span>
-                    <span className="text-[11px] text-slate-500 font-mono">{txn.date_of_transaction}</span>
+                    <span className="text-[11px] text-slate-500 font-sans">{formatDisplayDate(txn.date_of_transaction)}</span>
                   </div>
 
                   <div className="space-y-1">
@@ -180,10 +182,10 @@ export const ApprovalsModule: React.FC = () => {
                       {currentRole === 'Admin' ? (
                         <>
                           <button
-                            onClick={() => handleReject(txn.id, 2)}
+                            onClick={() => handleMoveToOpen(txn.id)}
                             className="px-2.5 py-1 bg-slate-200 text-rose-800 font-semibold rounded hover:bg-rose-100 cursor-pointer"
                           >
-                            Reject
+                            Move to Open (Query)
                           </button>
                           <button
                             onClick={() => handleApproveLayer2(txn.id)}
@@ -239,7 +241,7 @@ export const ApprovalsModule: React.FC = () => {
                 <div key={txn.id} className="p-4 rounded-xl border border-emerald-200 bg-emerald-50/40 space-y-3 text-xs">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-emerald-950 font-mono text-sm">{txn.id}</span>
-                    <span className="text-[11px] text-slate-500 font-mono">{txn.date_of_transaction}</span>
+                    <span className="text-[11px] text-slate-500 font-sans">{formatDisplayDate(txn.date_of_transaction)}</span>
                   </div>
 
                   <div className="space-y-1">
@@ -271,10 +273,10 @@ export const ApprovalsModule: React.FC = () => {
                       {currentRole === 'Admin' ? (
                         <>
                           <button
-                            onClick={() => handleReject(txn.id, 3)}
+                            onClick={() => handleMoveToOpen(txn.id)}
                             className="px-2.5 py-1 bg-slate-200 text-rose-800 font-semibold rounded hover:bg-rose-100 cursor-pointer"
                           >
-                            Reject
+                            Move to Open (Query)
                           </button>
 
                           <button
