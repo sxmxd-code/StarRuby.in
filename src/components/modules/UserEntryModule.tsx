@@ -1631,16 +1631,18 @@ export const UserEntryModule: React.FC = () => {
       {/* ==================================================================== */}
       {/* UNIVERSAL BULK INGESTION MODAL (CSV, GOOGLE SHEETS, PDF)             */}
       {/* ==================================================================== */}
-      <UniversalImportModal
-        isOpen={showImportModal}
-        onClose={() => setShowImportModal(false)}
-        mode="user"
-        selectedAccountId={selectedAccountId}
-        onSuccess={(count) => {
-          setFormFeedback(`Successfully imported ${count} user transactions.`);
-          setTimeout(() => setFormFeedback(null), 5000);
-        }}
-      />
+      {showImportModal && (
+        <UniversalImportModal
+          isOpen={showImportModal}
+          onClose={() => setShowImportModal(false)}
+          mode="user"
+          selectedAccountId={selectedAccountId}
+          onSuccess={(count) => {
+            setFormFeedback(`Successfully imported ${count} user transactions.`);
+            setTimeout(() => setFormFeedback(null), 5000);
+          }}
+        />
+      )}
 
       {/* ==================================================================== */}
       {/* TRANSACTION BOARD MODAL                                              */}

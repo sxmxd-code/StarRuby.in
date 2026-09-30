@@ -3,19 +3,9 @@
 // Supports: CSV, Google Sheets (Live URL & Paste), PDF Statement AI/OCR Extraction
 // ==============================================================================
 
-import * as pdfjsLib from 'pdfjs-dist';
 import { BankTransaction, UserTransaction, Party, Account } from '../types/database';
 import { getDaysDifference } from './matching';
 import { normalizeAlias } from './alias';
-
-// Configure pdfjs-dist worker in browser environment
-if (typeof window !== 'undefined' && 'Worker' in window) {
-  try {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
-  } catch (e) {
-    console.warn('PDF Worker setup note:', e);
-  }
-}
 
 // ------------------------------------------------------------------------------
 // 1. DATE & NUMBER NORMALIZATION HELPERS
@@ -193,6 +183,17 @@ export interface PdfExtractedLine {
  * Reads a PDF statement file and extracts tabular lines page-by-page
  */
 export async function extractLinesFromPdf(file: File): Promise<PdfExtractedLine[]> {
+  const pdfjsModule = await import('pdfjs-dist');
+  const pdfjsLib: any = (pdfjsModule as any).default || pdfjsModule;
+
+  if (pdfjsLib.GlobalWorkerOptions && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
+    try {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version || '3.11.174'}/pdf.worker.min.js`;
+    } catch (e) {
+      console.warn('PDF Worker setup note:', e);
+    }
+  }
+
   const arrayBuffer = await file.arrayBuffer();
   const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) });
   const pdf = await loadingTask.promise;

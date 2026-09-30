@@ -254,11 +254,17 @@ export const BankEntryModule: React.FC = () => {
         </div>
       )}
 
+      {/* ==================================================================== */}
+      {/* TOP: MAIN ENTRY FORM (7 COLS) + LIVE DUPLICATE SCANNER (5 COLS)      */}
+      {/* ==================================================================== */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Form (5 Cols) */}
-        <div className="lg:col-span-5 bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
+        {/* Form (7 Cols) */}
+        <div className="lg:col-span-7 bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
           <h2 className="text-xs font-bold uppercase tracking-wider text-blue-900 border-b pb-2 flex items-center justify-between">
-            <span>Add Statement Line</span>
+            <span className="flex items-center space-x-1.5">
+              <CreditCard className="w-4 h-4 text-blue-700" />
+              <span>Add Statement Line</span>
+            </span>
             <span className="text-[11px] font-normal text-slate-500">Manual Entry</span>
           </h2>
 
@@ -318,7 +324,7 @@ export const BankEntryModule: React.FC = () => {
                   onClick={() => setDirection('Payment')}
                   className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center space-x-2 border transition cursor-pointer ${
                     direction === 'Payment'
-                      ? 'bg-rose-50 border-rose-300 text-rose-700 shadow-xs'
+                      ? 'bg-rose-50 border-rose-300 text-rose-700 shadow-sm'
                       : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
                   }`}
                 >
@@ -330,7 +336,7 @@ export const BankEntryModule: React.FC = () => {
                   onClick={() => setDirection('Receipt')}
                   className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center space-x-2 border transition cursor-pointer ${
                     direction === 'Receipt'
-                      ? 'bg-emerald-50 border-emerald-300 text-emerald-700 shadow-xs'
+                      ? 'bg-emerald-50 border-emerald-300 text-emerald-700 shadow-sm'
                       : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
                   }`}
                 >
@@ -356,7 +362,7 @@ export const BankEntryModule: React.FC = () => {
                   value={amount}
                   onChange={e => setAmount(e.target.value)}
                   placeholder="0.00"
-                  className="w-full bg-slate-50 border border-slate-300 rounded-lg pl-14 pr-3 py-2 text-xs font-mono font-bold text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  className="w-full bg-slate-50 border border-slate-300 rounded-lg pl-12 pr-3 py-2 text-xs font-mono font-bold text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 />
               </div>
               <span className="text-[10px] text-slate-400 block mt-0.5">
@@ -466,32 +472,6 @@ export const BankEntryModule: React.FC = () => {
               />
             </div>
 
-            {/* LIVE DUPLICATE WARNING CARD */}
-            {liveDuplicates.length > 0 && (
-              <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl space-y-2 text-xs">
-                <div className="flex items-center space-x-2 text-amber-900 font-bold">
-                  <ShieldAlert className="w-4 h-4 text-amber-600" />
-                  <span>Live Duplicate Scanner Warning ({liveDuplicates.length} found)</span>
-                </div>
-                <p className="text-[11px] text-amber-800">
-                  Existing bank transaction with matching amount ({formatCurrencyAmount(parseFloat(amount), currency)}) found within ±7 days:
-                </p>
-                <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1">
-                  {liveDuplicates.map(d => (
-                    <div key={d.id} className="p-2 bg-white/80 rounded border border-amber-200 text-[11px] flex justify-between items-center">
-                      <div>
-                        <span className="font-mono font-bold text-amber-900">{d.id}</span> &bull; {formatDisplayDate(d.value_date)}
-                        <p className="text-slate-600 truncate max-w-[200px]">{d.narration}</p>
-                      </div>
-                      <span className="font-mono font-bold text-slate-900">
-                        {formatCurrencyAmount(d.debit > 0 ? d.debit : d.credit, d.currency)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
             <button
               type="submit"
               className="w-full py-2.5 bg-blue-700 hover:bg-blue-800 text-white font-bold text-xs rounded-lg shadow-sm transition flex items-center justify-center space-x-2 cursor-pointer"
@@ -501,8 +481,88 @@ export const BankEntryModule: React.FC = () => {
           </form>
         </div>
 
-        {/* Table of Statement Entries (7 Cols) */}
-        <div className="lg:col-span-7 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+        {/* RIGHT: Live Duplicate Scanner Panel (5 Cols) */}
+        <div className="lg:col-span-5 bg-white text-slate-900 p-5 rounded-xl border border-slate-200 shadow-sm space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-blue-700 flex items-center space-x-1.5">
+              <Sparkles className="w-4 h-4 text-blue-700" />
+              <span>Live Duplicate Scanner (&plusmn; 7 Days)</span>
+            </h3>
+            <span className="text-[10px] text-slate-500 font-mono">Real-Time Safeguard</span>
+          </div>
+
+          <p className="text-xs text-slate-500">
+            As you type, this panel surfaces bank statement lines already recorded within 1 week of the selected value date to prevent duplicate statement records before saving.
+          </p>
+
+          {liveDuplicates.length === 0 ? (
+            <div className="text-center py-10 text-slate-500 text-xs bg-slate-50 rounded-xl border border-slate-200">
+              <CheckCircle2 className="w-6 h-6 text-emerald-600 mx-auto mb-2 opacity-90" />
+              <span>No potential duplicate statement lines found for this date &amp; amount.</span>
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-[460px] overflow-y-auto pr-1">
+              {liveDuplicates.map(d => {
+                const daysDiff = getDaysDifference(valueDate, d.value_date);
+                const dAmount = direction === 'Payment' ? d.debit : d.credit;
+                const numAmount = parseFloat(amount) || 0;
+                const amountMatches = Math.abs(dAmount - numAmount) <= 5;
+
+                return (
+                  <div
+                    key={d.id}
+                    className={`p-3 rounded-xl border text-xs transition ${
+                      amountMatches
+                        ? 'bg-rose-50 border-rose-300 shadow-sm'
+                        : 'bg-slate-50 border-slate-200'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-bold text-blue-900 font-mono">{d.id}</span>
+                      <span className="text-[10px] font-mono text-slate-500">
+                        {formatDisplayDate(d.value_date)} ({daysDiff}d apart)
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-slate-800 truncate max-w-[200px]" title={d.narration}>
+                        {d.narration}
+                      </span>
+                      <span className="font-mono font-bold text-slate-900 tabular-nums">
+                        {formatCurrencyAmount(dAmount, d.currency)}
+                      </span>
+                    </div>
+
+                    {d.reference_no && (
+                      <p className="text-[11px] text-slate-500 mt-1 font-mono">
+                        Ref/UTR: {d.reference_no}
+                      </p>
+                    )}
+
+                    {d.description && (
+                      <p className="text-[11px] text-slate-500 mt-0.5 italic line-clamp-1">
+                        "{d.description}"
+                      </p>
+                    )}
+
+                    {amountMatches && (
+                      <div className="mt-2 text-[10px] font-bold text-rose-700 bg-rose-100/80 px-2 py-0.5 rounded-lg flex items-center space-x-1 border border-rose-200">
+                        <AlertCircle className="w-3 h-3 text-rose-700 shrink-0" />
+                        <span>Warning: Same amount &amp; close date! Verify before saving.</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ==================================================================== */}
+      {/* BOTTOM: STATEMENT LINES RECORDS TABLE (FULL WIDTH 12 COLS)           */}
+      {/* ==================================================================== */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col space-y-4">
           {/* Table Header and Search */}
           <div className="p-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
@@ -637,19 +697,20 @@ export const BankEntryModule: React.FC = () => {
             </table>
           </div>
         </div>
-      </div>
 
       {/* Universal Bulk Ingestion Modal (CSV, Google Sheets, PDF) */}
-      <UniversalImportModal
-        isOpen={showImportModal}
-        onClose={() => setShowImportModal(false)}
-        mode="bank"
-        selectedAccountId={selectedAccountId}
-        onSuccess={(count) => {
-          setFeedback(`Successfully imported ${count} bank statement transactions.`);
-          setTimeout(() => setFeedback(null), 5000);
-        }}
-      />
+      {showImportModal && (
+        <UniversalImportModal
+          isOpen={showImportModal}
+          onClose={() => setShowImportModal(false)}
+          mode="bank"
+          selectedAccountId={selectedAccountId}
+          onSuccess={(count) => {
+            setFeedback(`Successfully imported ${count} bank statement transactions.`);
+            setTimeout(() => setFeedback(null), 5000);
+          }}
+        />
+      )}
     </div>
   );
 };

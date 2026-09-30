@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import {
   parseDelimitedText,
@@ -30,6 +30,7 @@ import {
   ClipboardPaste,
   ShieldAlert,
   ArrowRight,
+  CreditCard,
 } from 'lucide-react';
 
 interface UniversalImportModalProps {
@@ -74,10 +75,48 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
   const [sheetsUrl, setSheetsUrl] = useState('');
   const [pastedText, setPastedText] = useState('');
 
-  if (!isOpen) return null;
+  // Target Account state
+  const availableAccounts = scopedAccounts.length > 0 ? scopedAccounts : accounts;
+  const [targetAccountId, setTargetAccountId] = useState<string>(
+    selectedAccountId || availableAccounts[0]?.id || ''
+  );
 
-  const currentAccount = accounts.find(a => a.id === selectedAccountId) || scopedAccounts[0];
-  const targetAccountId = currentAccount?.id || selectedAccountId;
+  useEffect(() => {
+    if (selectedAccountId) {
+      setTargetAccountId(selectedAccountId);
+    } else if (!targetAccountId && availableAccounts[0]?.id) {
+      setTargetAccountId(availableAccounts[0].id);
+    }
+  }, [selectedAccountId, availableAccounts, targetAccountId]);
+
+  const currentAccount = accounts.find(a => a.id === targetAccountId) || availableAccounts[0];
+
+  // Current Rows & Calculations (Unconditional Hooks)
+  const currentRows = mode === 'bank' ? bankRows : userRows;
+  const totalCount = currentRows.length;
+  const validCount = currentRows.filter(r => r.valid && !r.isDuplicate).length;
+  const duplicateCount = currentRows.filter(r => r.valid && r.isDuplicate).length;
+  const errorCount = currentRows.filter(r => !r.valid).length;
+
+  const filteredDisplayRows = useMemo(() => {
+    return currentRows.map((r, originalIndex) => ({ row: r, originalIndex })).filter(({ row }) => {
+      if (filterView === 'valid') return row.valid && !row.isDuplicate;
+      if (filterView === 'duplicates') return row.valid && row.isDuplicate;
+      if (filterView === 'errors') return !row.valid;
+      return true;
+    });
+  }, [currentRows, filterView]);
+
+  const importableCount = useMemo(() => {
+    return currentRows.filter(r => {
+      if (!r.valid) return false;
+      if (skipDuplicates && r.isDuplicate) return false;
+      return true;
+    }).length;
+  }, [currentRows, skipDuplicates]);
+
+  // ALL HOOKS COMPLETE — SAFE TO CONDITIONAL RETURN AFTER HOOKS
+  if (!isOpen) return null;
 
   // ----------------------------------------------------------------------------
   // TAB 1: CSV FILE UPLOADER
@@ -166,7 +205,7 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
       }
     } catch (err: any) {
       console.error('Google Sheets Error:', err);
-      setErrorFeedback(err.message || 'Failed to fetch Google Sheet.');
+      setErrorFeedback(err.message || 'Failed to import Google Sheet.');
     } finally {
       setIsProcessing(false);
       setProcessingStatus('');
@@ -175,18 +214,18 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
 
   const handleParsePastedText = () => {
     if (!pastedText.trim()) {
-      setErrorFeedback('Please paste spreadsheet cells (tab-separated) in the text area.');
+      setErrorFeedback('Please paste copied table cells into the text box.');
       return;
     }
 
     setIsProcessing(true);
-    setProcessingStatus('Parsing pasted spreadsheet cells...');
+    setProcessingStatus('Parsing pasted cells...');
     setErrorFeedback(null);
 
     try {
       const matrix = parseDelimitedText(pastedText.trim());
-      if (matrix.length < 2) {
-        throw new Error('Pasted content must contain a header row and at least 1 data row.');
+      if (matrix.length === 0) {
+        throw new Error('Could not identify table rows in pasted text.');
       }
 
       if (mode === 'bank') {
@@ -207,10 +246,9 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
         );
         setUserRows(parsed);
       }
-      setPastedText('');
     } catch (err: any) {
-      console.error('Paste Parse Error:', err);
-      setErrorFeedback(err.message || 'Failed to parse pasted cells.');
+      console.error('Pasted Text Parse Error:', err);
+      setErrorFeedback(err.message || 'Failed to parse pasted table content.');
     } finally {
       setIsProcessing(false);
       setProcessingStatus('');
@@ -218,23 +256,23 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
   };
 
   // ----------------------------------------------------------------------------
-  // TAB 3: PDF STATEMENT EXTRACTION (AI & OCR)
+  // TAB 3: PDF STATEMENT EXTRACTION (LOCAL AI/OCR PARSER)
   // ----------------------------------------------------------------------------
   const handlePdfFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setIsProcessing(true);
-    setProcessingStatus(`Extracting structured transactions from PDF: ${file.name}...`);
+    setProcessingStatus(`Parsing PDF Statement (${file.name})...`);
     setErrorFeedback(null);
 
     try {
       const lines = await extractLinesFromPdf(file);
       if (lines.length === 0) {
-        throw new Error('Could not extract readable text from PDF. The document might be an un-rendered image or password protected.');
+        throw new Error('No readable text found in PDF. If this is a scanned photo, please use Gemini OCR or export CSV from your online banking portal.');
       }
 
-      setProcessingStatus(`Analyzed ${lines.length} lines. Extracting financial transactions...`);
+      setProcessingStatus(`Extracted ${lines.length} lines from PDF. Parsing statement ledger entries...`);
 
       if (mode === 'bank') {
         const parsed = parseBankStatementPdfLines(
@@ -244,7 +282,7 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
           accounts
         );
         if (parsed.length === 0) {
-          throw new Error('No structured bank statement transaction rows could be matched. Please verify the PDF contains dates, narrations, and debit/credit amounts.');
+          throw new Error('No transaction line items identified in PDF. Check if this is a supported bank statement format.');
         }
         setBankRows(parsed);
       } else {
@@ -270,7 +308,7 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
   };
 
   // ----------------------------------------------------------------------------
-  // ROW REMOVAL & METRICS
+  // ROW REMOVAL & CONTROLS
   // ----------------------------------------------------------------------------
   const removeRow = (index: number) => {
     if (mode === 'bank') {
@@ -286,35 +324,16 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
     setErrorFeedback(null);
   };
 
-  const currentRows = mode === 'bank' ? bankRows : userRows;
-  const totalCount = currentRows.length;
-  const validCount = currentRows.filter(r => r.valid && !r.isDuplicate).length;
-  const duplicateCount = currentRows.filter(r => r.valid && r.isDuplicate).length;
-  const errorCount = currentRows.filter(r => !r.valid).length;
-
-  const filteredDisplayRows = useMemo(() => {
-    return currentRows.map((r, originalIndex) => ({ row: r, originalIndex })).filter(({ row }) => {
-      if (filterView === 'valid') return row.valid && !row.isDuplicate;
-      if (filterView === 'duplicates') return row.valid && row.isDuplicate;
-      if (filterView === 'errors') return !row.valid;
-      return true;
-    });
-  }, [currentRows, filterView]);
-
-  // Importable subset
-  const importableCount = useMemo(() => {
-    return currentRows.filter(r => {
-      if (!r.valid) return false;
-      if (skipDuplicates && r.isDuplicate) return false;
-      return true;
-    }).length;
-  }, [currentRows, skipDuplicates]);
-
   // ----------------------------------------------------------------------------
   // COMMIT IMPORT TO DATABASE
   // ----------------------------------------------------------------------------
   const handleCommitImport = () => {
     if (importableCount === 0) return;
+
+    if (!targetAccountId) {
+      setErrorFeedback('Please select a target Bank Account before importing.');
+      return;
+    }
 
     if (mode === 'bank') {
       const candidates = bankRows.filter(r => {
@@ -324,7 +343,7 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
       });
 
       const toInsert = candidates.map(r => ({
-        account_id: r.account_id,
+        account_id: r.account_id || targetAccountId,
         value_date: r.value_date,
         narration: r.narration,
         reference_no: r.reference_no,
@@ -347,8 +366,9 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
       });
 
       const toInsert = candidates.map(r => {
-        const acc = accounts.find(a => a.id === r.account_id);
-        const curr = acc?.account_currency || 'INR';
+        const accId = r.account_id || targetAccountId;
+        const acc = accounts.find(a => a.id === accId);
+        const curr = acc?.account_currency || currentAccount?.account_currency || 'INR';
         const rate = r.exchange_rate;
         const inr = rate && rate > 0 ? Number((r.amount * rate).toFixed(2)) : undefined;
 
@@ -360,7 +380,7 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
         ) : undefined;
 
         return {
-          account_id: r.account_id,
+          account_id: accId,
           party_id: matchedParty?.id,
           party_name_raw: rowPartyName,
           date_of_transaction: r.date,
@@ -383,39 +403,59 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-150">
+    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-150">
       <div className="bg-white rounded-2xl shadow-2xl max-w-5xl w-full max-h-[92vh] flex flex-col border border-slate-200 overflow-hidden">
         
         {/* Header */}
-        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/80">
           <div className="flex items-center space-x-3">
             <span className="p-2.5 bg-rose-100 text-rose-800 rounded-xl">
               <Upload className="w-5 h-5" />
             </span>
             <div>
-              <div className="flex items-center space-x-2">
+              <div className="flex items-center space-x-3 flex-wrap gap-y-1">
                 <h3 className="text-base font-bold font-serif text-slate-900">
                   {mode === 'bank' ? 'Bulk Bank Statement Transactions Ingestion' : 'Bulk User Transactions Ingestion'}
                 </h3>
-                <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-rose-100 text-rose-800 border border-rose-200">
-                  {targetAccountId} &bull; {currentAccount?.bank_name}
-                </span>
+
+                {/* Target Account Badge / Switcher */}
+                {availableAccounts.length > 0 ? (
+                  <div className="flex items-center space-x-1.5 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-lg text-xs">
+                    <CreditCard className="w-3.5 h-3.5 text-rose-700" />
+                    <span className="text-[10px] font-bold text-rose-900 uppercase">Target Account:</span>
+                    <select
+                      value={targetAccountId}
+                      onChange={e => setTargetAccountId(e.target.value)}
+                      className="bg-transparent text-rose-900 font-bold text-xs focus:outline-none cursor-pointer"
+                    >
+                      {availableAccounts.map(a => (
+                        <option key={a.id} value={a.id}>
+                          {a.id} &bull; {a.bank_name} ({a.account_currency})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-200">
+                    No Accounts Configured
+                  </span>
+                )}
               </div>
-              <p className="text-xs text-slate-500">
-                Multi-channel ingestion &bull; CSV, Google Sheets, PDF statements &bull; Live $\pm 7$ Days Duplicate Scanner
+              <p className="text-xs text-slate-500 mt-0.5">
+                Multi-channel ingestion &bull; CSV, Google Sheets, PDF statements &bull; Live &plusmn; 7 Days Duplicate Scanner
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200 rounded-lg transition"
+            className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200 rounded-lg transition cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Tab Selection Bar */}
-        <div className="px-6 pt-3 border-b border-slate-100 flex items-center justify-between bg-white">
+        <div className="px-6 pt-3 border-b border-slate-100 flex items-center justify-between bg-white flex-wrap gap-2">
           <div className="flex space-x-2">
             <button
               onClick={() => setActiveTab('csv')}
@@ -448,7 +488,7 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
               }`}
             >
               <FileText className="w-4 h-4 text-purple-600" />
-              <span>3. PDF Statement (OCR & AI)</span>
+              <span>3. PDF Statement (OCR &amp; AI)</span>
             </button>
           </div>
 
@@ -465,6 +505,14 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
         {/* Modal Body / Active Ingestion Channel */}
         <div className="p-6 overflow-y-auto space-y-5 flex-1">
 
+          {/* Warning if no account */}
+          {availableAccounts.length === 0 && (
+            <div className="p-4 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-900 font-semibold flex items-center space-x-2">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>No bank accounts are registered in the system yet. Please configure bank accounts in Masters & Setup before importing transactions.</span>
+            </div>
+          )}
+
           {/* TAB 1: CSV INGESTION */}
           {activeTab === 'csv' && currentRows.length === 0 && (
             <div className="space-y-4">
@@ -477,7 +525,7 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
                     accept=".csv,.txt"
                     onChange={handleCsvFile}
                     className="hidden"
-                    disabled={isProcessing}
+                    disabled={isProcessing || availableAccounts.length === 0}
                   />
                 </label>
                 <p className="text-xs text-slate-400 mt-1">
@@ -510,7 +558,7 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
                   />
                   <button
                     onClick={handleFetchGoogleSheet}
-                    disabled={isProcessing || !sheetsUrl.trim()}
+                    disabled={isProcessing || !sheetsUrl.trim() || availableAccounts.length === 0}
                     className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition disabled:opacity-50 flex items-center space-x-1 cursor-pointer"
                   >
                     <span>{isProcessing ? 'Fetching...' : 'Fetch Live Sheet'}</span>
@@ -542,7 +590,7 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
                 <div className="flex justify-end">
                   <button
                     onClick={handleParsePastedText}
-                    disabled={isProcessing || !pastedText.trim()}
+                    disabled={isProcessing || !pastedText.trim() || availableAccounts.length === 0}
                     className="px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-bold transition disabled:opacity-50 cursor-pointer"
                   >
                     Parse Pasted Table
@@ -564,13 +612,13 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
                     accept=".pdf"
                     onChange={handlePdfFile}
                     className="hidden"
-                    disabled={isProcessing}
+                    disabled={isProcessing || availableAccounts.length === 0}
                   />
                 </label>
                 <div className="flex items-center justify-center space-x-1.5 mt-2">
                   <Sparkles className="w-3.5 h-3.5 text-purple-600 animate-pulse" />
                   <span className="text-xs font-semibold text-purple-900">
-                    Client-Side PDF Table Parser + Gemini 2.5 Flash Multimodal OCR
+                    High-Accuracy PDF Table Parser
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-500 mt-1 max-w-lg mx-auto">
@@ -613,7 +661,7 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
                     onClick={() => setFilterView('all')}
                     className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
                       filterView === 'all'
-                        ? 'bg-slate-900 text-white shadow-xs'
+                        ? 'bg-slate-900 text-white shadow-sm'
                         : 'bg-white border text-slate-600 hover:bg-slate-100'
                     }`}
                   >
@@ -623,7 +671,7 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
                     onClick={() => setFilterView('valid')}
                     className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center space-x-1 cursor-pointer ${
                       filterView === 'valid'
-                        ? 'bg-emerald-600 text-white shadow-xs'
+                        ? 'bg-emerald-600 text-white shadow-sm'
                         : 'bg-emerald-50 border border-emerald-200 text-emerald-800 hover:bg-emerald-100'
                     }`}
                   >
@@ -634,7 +682,7 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
                     onClick={() => setFilterView('duplicates')}
                     className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center space-x-1 cursor-pointer ${
                       filterView === 'duplicates'
-                        ? 'bg-amber-600 text-white shadow-xs'
+                        ? 'bg-amber-600 text-white shadow-sm'
                         : 'bg-amber-50 border border-amber-200 text-amber-800 hover:bg-amber-100'
                     }`}
                   >
@@ -646,7 +694,7 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
                       onClick={() => setFilterView('errors')}
                       className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center space-x-1 cursor-pointer ${
                         filterView === 'errors'
-                          ? 'bg-rose-600 text-white shadow-xs'
+                          ? 'bg-rose-600 text-white shadow-sm'
                           : 'bg-rose-50 border border-rose-200 text-rose-800 hover:bg-rose-100'
                       }`}
                     >
@@ -667,13 +715,13 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
                     />
                     <span className="flex items-center space-x-1">
                       <ShieldAlert className="w-3.5 h-3.5 text-amber-600" />
-                      <span>Skip Duplicates (±7 Days)</span>
+                      <span>Skip Duplicates (&plusmn;7 Days)</span>
                     </span>
                   </label>
 
                   <button
                     onClick={clearStaged}
-                    className="text-xs text-rose-700 hover:underline font-semibold"
+                    className="text-xs text-rose-700 hover:underline font-semibold cursor-pointer"
                   >
                     Upload Another File
                   </button>
@@ -853,7 +901,7 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-between bg-slate-50/70">
+        <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-between bg-slate-50/80">
           <div className="text-xs text-slate-500">
             {currentRows.length > 0 ? (
               <span>
@@ -874,8 +922,8 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
             </button>
             <button
               onClick={handleCommitImport}
-              disabled={importableCount === 0 || isProcessing}
-              className="px-5 py-2 bg-rose-700 hover:bg-rose-800 text-white text-xs font-bold rounded-xl shadow-xs transition disabled:opacity-50 flex items-center space-x-1.5 cursor-pointer"
+              disabled={importableCount === 0 || isProcessing || availableAccounts.length === 0}
+              className="px-5 py-2 bg-rose-700 hover:bg-rose-800 text-white text-xs font-bold rounded-xl shadow-sm transition disabled:opacity-50 flex items-center space-x-1.5 cursor-pointer"
             >
               <span>Import {importableCount} Entries to Database</span>
               <ArrowRight className="w-4 h-4" />
