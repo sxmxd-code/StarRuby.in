@@ -105,7 +105,7 @@ export interface PartyDescriptionTemplate {
 }
 
 export type TransactionDirection = 'Receipt' | 'Payment';
-export type UserTxnStatus = 'open' | 'in_approval' | 'approved' | 'rejected';
+export type UserTxnStatus = 'open' | 'queried' | 'in_approval' | 'approved' | 'rejected';
 export type AmountConfirmedStatus = 'Confirmed' | 'Unconfirmed';
 export type VerifiedWithBankStatus = 'Yes' | 'No';
 

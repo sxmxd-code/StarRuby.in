@@ -30,7 +30,6 @@ export type NavTab =
   | 'aliases'
   | 'match'
   | 'approvals'
-  | 'discrepancies'
   | 'pending_queue'
   | 'statement_uploads'
   | 'statement_ledger'
@@ -116,9 +115,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       items: [
         { id: 'duplicates', label: 'Duplicates Triage', icon: Copy },
         { id: 'aliases', label: 'Party Aliases Queue', icon: Tag, badge: unmappedAliasesCount },
-        { id: 'match', label: 'Match & Reconcile (L1)', icon: GitMerge },
+        { id: 'match', label: 'Match & Reconcile (L1)', icon: GitMerge, badge: unconfirmedTxnsCount },
         { id: 'approvals', label: '3-Layer Approvals', icon: CheckCheck, badge: inApprovalCount },
-        { id: 'discrepancies', label: 'Pending Discrepancies', icon: AlertTriangle, badge: unconfirmedTxnsCount },
         { id: 'pending_queue', label: 'Pending Queue (Calendar)', icon: Clock, badge: pendingSuggestedCount },
       ],
     },

@@ -20,8 +20,12 @@ import {
   CheckCircle2,
   ArrowRightLeft,
   UserCheck,
+  FileText,
+  HelpCircle,
+  MessageSquare,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
+import { TransactionBoardModal } from './TransactionBoardModal';
 
 export const MatchModule: React.FC = () => {
   const {
@@ -31,12 +35,17 @@ export const MatchModule: React.FC = () => {
     partiesMap,
     txnBankLinks,
     closeInMatchTab,
+    moveDiscrepancyToOpen,
+    markTransactionAsQueried,
     currentRole,
     activeCompanyId,
   } = useApp();
 
   // Dual-view mode: 'user_to_bank' or 'bank_to_user'
   const [matchMode, setMatchMode] = useState<'user_to_bank' | 'bank_to_user'>('user_to_bank');
+
+  // Transaction Board Modal state
+  const [boardTxn, setBoardTxn] = useState<UserTransaction | null>(null);
 
   // Filter user transactions that need matching or are open/in_approval
   const [selectedTxnId, setSelectedTxnId] = useState<string | null>(null);
@@ -45,6 +54,8 @@ export const MatchModule: React.FC = () => {
   const [closeNote, setCloseNote] = useState('');
   const [feedback, setFeedback] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('open');
+  const [isQueryInputOpen, setIsQueryInputOpen] = useState(false);
+  const [queryInputReason, setQueryInputReason] = useState('');
 
   // Bank to User state
   const [selectedBankTxnId, setSelectedBankTxnId] = useState<string | null>(null);
@@ -56,12 +67,36 @@ export const MatchModule: React.FC = () => {
   // --------------------------------------------------------------------------
   // TAB 1: USER -> BANK MATCHING
   // --------------------------------------------------------------------------
+  const counts = useMemo(() => {
+    return {
+      all: scopedUserTransactions.length,
+      open: scopedUserTransactions.filter(t => t.status === 'open').length,
+      queried: scopedUserTransactions.filter(t => t.status === 'queried').length,
+      unconfirmed: scopedUserTransactions.filter(t => t.amount_confirmed === 'Unconfirmed').length,
+      in_approval: scopedUserTransactions.filter(t => t.status === 'in_approval').length,
+    };
+  }, [scopedUserTransactions]);
+
   const openUserTxns = useMemo(() => {
     return scopedUserTransactions.filter(t => {
       if (statusFilter === 'all') return true;
+      if (statusFilter === 'unconfirmed') return t.amount_confirmed === 'Unconfirmed';
       return t.status === statusFilter;
     });
   }, [scopedUserTransactions, statusFilter]);
+
+  const handleRaiseQuery = () => {
+    if (!selectedTxn) return;
+    if (!queryInputReason.trim()) {
+      alert('Please provide a reason or question for the query.');
+      return;
+    }
+    markTransactionAsQueried(selectedTxn.id, queryInputReason.trim());
+    setFeedback(`Transaction ${selectedTxn.id} tagged as QUERY. Audit delta and comment recorded.`);
+    setQueryInputReason('');
+    setIsQueryInputOpen(false);
+    setTimeout(() => setFeedback(null), 4000);
+  };
 
   const selectedTxn = useMemo(() => {
     if (!selectedTxnId) return openUserTxns[0] || null;
@@ -208,25 +243,79 @@ export const MatchModule: React.FC = () => {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* LEFT: User Transactions Queue (5 Cols) */}
           <div className="lg:col-span-5 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col max-h-[750px]">
-            <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
-              <div>
-                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                  User Transactions ({openUserTxns.length})
-                </h3>
-                <span className="text-[11px] text-slate-500">Pick one to match</span>
+            <div className="p-3 border-b border-slate-200 bg-slate-50 space-y-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                    User Transactions ({openUserTxns.length})
+                  </h3>
+                  <span className="text-[10px] text-slate-500">Pick one to inspect or match candidates</span>
+                </div>
               </div>
 
-              {/* Status Filter */}
-              <select
-                value={statusFilter}
-                onChange={e => setStatusFilter(e.target.value)}
-                className="bg-white border border-slate-300 rounded-lg px-2 py-1 text-xs text-slate-800"
-              >
-                <option value="open">Open (Needs Layer 1)</option>
-                <option value="in_approval">In Approval</option>
-                <option value="approved">Approved</option>
-                <option value="all">All Statuses</option>
-              </select>
+              {/* Status Filter Chips */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-[11px] font-semibold no-scrollbar">
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter('open')}
+                  className={`px-2.5 py-1 rounded-md transition cursor-pointer shrink-0 ${
+                    statusFilter === 'open'
+                      ? 'bg-rose-700 text-white font-bold shadow-xs'
+                      : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  Open ({counts.open})
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter('queried')}
+                  className={`px-2.5 py-1 rounded-md transition cursor-pointer shrink-0 flex items-center space-x-1 ${
+                    statusFilter === 'queried'
+                      ? 'bg-purple-700 text-white font-bold shadow-xs'
+                      : 'bg-purple-50 text-purple-900 border border-purple-200 hover:bg-purple-100'
+                  }`}
+                >
+                  <span>Queried</span>
+                  <span className="px-1 bg-purple-200/60 rounded text-[9px] font-bold">{counts.queried}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter('unconfirmed')}
+                  className={`px-2.5 py-1 rounded-md transition cursor-pointer shrink-0 ${
+                    statusFilter === 'unconfirmed'
+                      ? 'bg-amber-600 text-white font-bold shadow-xs'
+                      : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  Unconfirmed ({counts.unconfirmed})
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter('in_approval')}
+                  className={`px-2.5 py-1 rounded-md transition cursor-pointer shrink-0 ${
+                    statusFilter === 'in_approval'
+                      ? 'bg-blue-700 text-white font-bold shadow-xs'
+                      : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  In Approval ({counts.in_approval})
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter('all')}
+                  className={`px-2 py-1 rounded-md transition cursor-pointer shrink-0 ${
+                    statusFilter === 'all'
+                      ? 'bg-slate-800 text-white font-bold shadow-xs'
+                      : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  All ({counts.all})
+                </button>
+              </div>
             </div>
 
             <div className="overflow-y-auto divide-y divide-slate-100 flex-1">
@@ -270,33 +359,55 @@ export const MatchModule: React.FC = () => {
                       </div>
 
                       <div className="flex items-center justify-between mt-2 pt-1 border-t border-slate-100/80 text-[10px]">
-                        <span
-                          className={`px-1.5 py-0.2 rounded font-bold ${
-                            t.amount_confirmed === 'Confirmed'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-amber-100 text-amber-800'
-                          }`}
-                        >
-                          {t.amount_confirmed}
-                        </span>
-
-                        <span
-                          className={`px-1.5 py-0.2 rounded font-bold uppercase ${
-                            t.status === 'approved'
-                              ? 'text-emerald-700'
-                              : t.status === 'in_approval'
-                              ? 'text-amber-700'
-                              : 'text-slate-500'
-                          }`}
-                        >
-                          {t.status.replace('_', ' ')}
-                        </span>
-
-                        {existingLinks.length > 0 && (
-                          <span className="text-blue-700 font-semibold font-mono">
-                            {existingLinks.length} bank link(s)
+                        <div className="flex items-center space-x-1.5 flex-wrap">
+                          <span
+                            className={`px-1.5 py-0.2 rounded font-bold ${
+                              t.amount_confirmed === 'Confirmed'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-amber-100 text-amber-800'
+                            }`}
+                          >
+                            {t.amount_confirmed}
                           </span>
-                        )}
+
+                          {t.status === 'queried' ? (
+                            <span className="px-1.5 py-0.2 rounded font-extrabold uppercase bg-purple-100 text-purple-900 border border-purple-300 text-[9px] tracking-wider animate-pulse">
+                              QUERY
+                            </span>
+                          ) : (
+                            <span
+                              className={`px-1.5 py-0.2 rounded font-bold uppercase ${
+                                t.status === 'approved'
+                                  ? 'text-emerald-700'
+                                  : t.status === 'in_approval'
+                                  ? 'text-amber-700'
+                                  : 'text-slate-500'
+                              }`}
+                            >
+                              {t.status.replace('_', ' ')}
+                            </span>
+                          )}
+
+                          {existingLinks.length > 0 && (
+                            <span className="text-blue-700 font-semibold font-mono">
+                              {existingLinks.length} bank link(s)
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Open Board Button */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setBoardTxn(t);
+                          }}
+                          className="px-2 py-0.5 rounded bg-slate-100 hover:bg-rose-50 hover:text-rose-700 text-slate-600 font-semibold flex items-center space-x-1 cursor-pointer transition text-[10px]"
+                          title="Open Transaction Board"
+                        >
+                          <FileText className="w-3 h-3 text-rose-700" />
+                          <span>Board</span>
+                        </button>
                       </div>
                     </div>
                   );
@@ -315,10 +426,26 @@ export const MatchModule: React.FC = () => {
                     <div className="flex items-center space-x-2">
                       <span className="font-bold text-rose-800 text-sm font-mono">{selectedTxn.id}</span>
                       <span className="text-xs text-slate-500">&bull; {formatDisplayDate(selectedTxn.date_of_transaction)}</span>
+                      {selectedTxn.status === 'queried' && (
+                        <span className="px-2 py-0.5 bg-purple-100 text-purple-900 border border-purple-300 rounded font-extrabold text-[10px] tracking-wider animate-pulse">
+                          QUERY TAG
+                        </span>
+                      )}
                     </div>
-                    <span className="text-sm font-mono font-bold text-emerald-700 tabular-nums">
-                      {formatCurrencyAmount(selectedTxn.amount, selectedTxn.currency)}
-                    </span>
+                    <div className="flex items-center space-x-3">
+                      <span className="text-sm font-mono font-bold text-emerald-700 tabular-nums">
+                        {formatCurrencyAmount(selectedTxn.amount, selectedTxn.currency)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setBoardTxn(selectedTxn)}
+                        className="px-2.5 py-1 rounded-lg bg-white hover:bg-rose-50 border border-rose-200 text-rose-800 font-bold text-xs flex items-center space-x-1.5 transition cursor-pointer shadow-2xs"
+                        title="Open full Transaction Board"
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                        <span>Board</span>
+                      </button>
+                    </div>
                   </div>
 
                   <div className="text-xs">
@@ -453,7 +580,57 @@ export const MatchModule: React.FC = () => {
                     className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none"
                   />
 
-                  <div className="flex items-center justify-end space-x-3 pt-1">
+                  {isQueryInputOpen && (
+                    <div className="p-3 bg-purple-50/80 border border-purple-200 rounded-lg space-y-2">
+                      <div className="flex items-center justify-between text-xs font-bold text-purple-900">
+                        <span>Raise Query for Admin / Staff Review</span>
+                        <button type="button" onClick={() => setIsQueryInputOpen(false)} className="text-purple-600 hover:text-purple-900 text-xs cursor-pointer">Cancel</button>
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="Enter specific question or discrepancy reason for Admin..."
+                        value={queryInputReason}
+                        onChange={e => setQueryInputReason(e.target.value)}
+                        className="w-full bg-white border border-purple-200 rounded-lg px-3 py-1.5 text-xs text-slate-800 focus:outline-none"
+                      />
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={handleRaiseQuery}
+                          className="px-4 py-1.5 bg-purple-700 text-white font-bold text-xs rounded-lg hover:bg-purple-800 transition cursor-pointer"
+                        >
+                          Confirm & Tag as QUERY
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between flex-wrap gap-2 pt-1">
+                    <div className="flex items-center space-x-2">
+                      {selectedTxn.status === 'queried' ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            moveDiscrepancyToOpen(selectedTxn.id, 'Query addressed, re-opened');
+                            setFeedback(`Query cleared for ${selectedTxn.id} and moved back to Open.`);
+                            setTimeout(() => setFeedback(null), 4000);
+                          }}
+                          className="px-3 py-2 bg-purple-100 text-purple-900 border border-purple-300 hover:bg-purple-200 font-bold text-xs rounded-lg transition cursor-pointer"
+                        >
+                          Clear Query & Re-Open
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setIsQueryInputOpen(prev => !prev)}
+                          className="px-3 py-2 bg-purple-50 text-purple-800 border border-purple-200 hover:bg-purple-100 font-bold text-xs rounded-lg transition flex items-center space-x-1 cursor-pointer"
+                        >
+                          <HelpCircle className="w-3.5 h-3.5 text-purple-700" />
+                          <span>Raise Query</span>
+                        </button>
+                      )}
+                    </div>
+
                     {currentRole === 'Staff' ? (
                       <div className="w-full sm:w-auto px-4 py-2 bg-amber-50 border border-amber-200 text-amber-900 rounded-lg text-xs font-semibold flex items-center space-x-2">
                         <ShieldAlert className="w-4 h-4 text-amber-700 shrink-0" />
@@ -468,7 +645,9 @@ export const MatchModule: React.FC = () => {
                         <Check className="w-4 h-4" />
                         <span>
                           {selectedTxn.status !== 'open'
-                            ? 'Transaction Already Closed'
+                            ? selectedTxn.status === 'queried'
+                              ? 'Action Blocked (Queried)'
+                              : 'Transaction Already Closed'
                             : selectedBankIds.size > 0
                             ? `Close & Link (${selectedBankIds.size} Bank Line)`
                             : 'Close Without Bank Links (Ready for Approvals)'}
@@ -632,20 +811,41 @@ export const MatchModule: React.FC = () => {
                               <span className="text-[11px] text-slate-500">
                                 {formatDisplayDate(c.userTxn.date_of_transaction)}
                               </span>
+                              {c.userTxn.status === 'queried' && (
+                                <span className="px-1.5 py-0.2 rounded font-extrabold uppercase bg-purple-100 text-purple-900 border border-purple-300 text-[9px] tracking-wider animate-pulse">
+                                  QUERY
+                                </span>
+                              )}
                             </div>
 
-                            {/* Confidence Badge */}
-                            <span
-                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                c.confidenceScore >= 80
-                                  ? 'bg-emerald-100 text-emerald-800'
-                                  : c.confidenceScore >= 50
-                                  ? 'bg-amber-100 text-amber-800'
-                                  : 'bg-slate-100 text-slate-700'
-                              }`}
-                            >
-                              {c.confidenceScore}% Confidence
-                            </span>
+                            <div className="flex items-center space-x-2">
+                              {/* Confidence Badge */}
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                  c.confidenceScore >= 80
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : c.confidenceScore >= 50
+                                    ? 'bg-amber-100 text-amber-800'
+                                    : 'bg-slate-100 text-slate-700'
+                                }`}
+                              >
+                                {c.confidenceScore}% Confidence
+                              </span>
+
+                              {/* Board button */}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setBoardTxn(c.userTxn);
+                                }}
+                                className="px-2 py-0.5 rounded bg-slate-100 hover:bg-rose-50 hover:text-rose-700 text-slate-600 font-semibold flex items-center space-x-1 cursor-pointer transition text-[10px]"
+                                title="Open Transaction Board"
+                              >
+                                <FileText className="w-3 h-3 text-rose-700" />
+                                <span>Board</span>
+                              </button>
+                            </div>
                           </div>
 
                           <div className="flex items-center justify-between">
@@ -722,6 +922,14 @@ export const MatchModule: React.FC = () => {
             )}
           </div>
         </div>
+      )}
+
+      {/* 1-Click Transaction Board Modal Launcher */}
+      {boardTxn && (
+        <TransactionBoardModal
+          transaction={boardTxn}
+          onClose={() => setBoardTxn(null)}
+        />
       )}
     </div>
   );

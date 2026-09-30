@@ -51,6 +51,7 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
     updateUserTransactionCell,
     recordVersions,
     moveDiscrepancyToOpen,
+    markTransactionAsQueried,
   } = useApp();
 
   const [newComment, setNewComment] = useState('');
@@ -157,10 +158,11 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
                 <span className={`px-2 py-0.5 text-[10px] font-bold uppercase rounded-lg border ${
                   transaction.status === 'approved' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' :
                   transaction.status === 'in_approval' ? 'bg-amber-50 text-amber-800 border-amber-200' :
+                  transaction.status === 'queried' ? 'bg-purple-100 text-purple-900 border-purple-300 font-extrabold animate-pulse' :
                   transaction.status === 'rejected' ? 'bg-rose-50 text-rose-800 border-rose-200' :
                   'bg-slate-100 text-slate-700 border-slate-200'
                 }`}>
-                  {transaction.status.replace('_', ' ')}
+                  {transaction.status === 'queried' ? 'QUERY' : transaction.status.replace('_', ' ')}
                 </span>
                 <span className={`px-2 py-0.5 text-[10px] font-bold rounded-lg border ${
                   transaction.amount_confirmed === 'Confirmed' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-amber-50 text-amber-800 border-amber-200'
@@ -467,7 +469,23 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
                     onClick={handleMoveToOpen}
                     className="px-3 py-2 sm:py-1.5 bg-slate-200 text-rose-900 rounded-lg text-xs font-semibold hover:bg-rose-200 cursor-pointer"
                   >
-                    Move to Open (Query)
+                    Move to Open
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const reason = approvalComment.trim() || prompt('Enter query question or note for Admin review:');
+                      if (reason && reason.trim()) {
+                        markTransactionAsQueried(transaction.id, reason.trim());
+                        setApprovalFeedback(`Transaction status changed to QUERIED: "${reason.trim()}"`);
+                        setApprovalComment('');
+                        setTimeout(() => setApprovalFeedback(null), 4000);
+                      }
+                    }}
+                    className="px-3 py-2 sm:py-1.5 bg-purple-100 text-purple-900 border border-purple-300 rounded-lg text-xs font-semibold hover:bg-purple-200 cursor-pointer"
+                  >
+                    Raise Query (QUERY Tag)
                   </button>
                 </div>
               </div>

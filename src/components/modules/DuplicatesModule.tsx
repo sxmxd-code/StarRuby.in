@@ -13,26 +13,28 @@ export const DuplicatesModule: React.FC = () => {
     deleteBankTransaction,
     currentRole,
     currentUser,
+    dismissedDuplicatePairs,
+    dismissDuplicatePair,
+    undismissDuplicatePair,
   } = useApp();
 
-  const [dismissedPairs, setDismissedPairs] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<'user' | 'bank'>('user');
   const [feedback, setFeedback] = useState<string | null>(null);
 
-  // Compute duplicate pairs (scoped by role/company)
+  // Compute duplicate pairs (scoped by role/company, filtering out permanently dismissed pairs)
   const userDuplicatePairs = useMemo(() => {
     const rawPairs = detectUserDuplicates(scopedUserTransactions, partiesMap, 3, 5);
-    return rawPairs.filter(p => !dismissedPairs.has(p.id));
-  }, [scopedUserTransactions, partiesMap, dismissedPairs]);
+    return rawPairs.filter(p => !dismissedDuplicatePairs.has(p.id));
+  }, [scopedUserTransactions, partiesMap, dismissedDuplicatePairs]);
 
   const bankDuplicatePairs = useMemo(() => {
     const rawPairs = detectBankDuplicates(scopedBankTransactions, 3, 5);
-    return rawPairs.filter(p => !dismissedPairs.has(p.id));
-  }, [scopedBankTransactions, dismissedPairs]);
+    return rawPairs.filter(p => !dismissedDuplicatePairs.has(p.id));
+  }, [scopedBankTransactions, dismissedDuplicatePairs]);
 
   const handleDismiss = (pairId: string) => {
-    setDismissedPairs(prev => new Set([...prev, pairId]));
-    setFeedback('Pair marked as genuine (not a duplicate). Dismissed from queue.');
+    dismissDuplicatePair(pairId);
+    setFeedback('Pair marked as genuine (not a duplicate). Permanently dismissed to database.');
     setTimeout(() => setFeedback(null), 3000);
   };
 
@@ -42,7 +44,7 @@ export const DuplicatesModule: React.FC = () => {
     }
     const success = deleteUserTransaction(copyId, 'Duplicate entry removed via Duplicates Triage');
     if (success) {
-      setDismissedPairs(prev => new Set([...prev, pairId]));
+      dismissDuplicatePair(pairId);
       setFeedback(`Duplicate entry ${copyId} deleted. Audit trail preserved in record_versions.`);
       setTimeout(() => setFeedback(null), 4000);
     }
@@ -54,7 +56,7 @@ export const DuplicatesModule: React.FC = () => {
     }
     const success = deleteBankTransaction(copyId, 'Duplicate bank entry removed');
     if (success) {
-      setDismissedPairs(prev => new Set([...prev, pairId]));
+      dismissDuplicatePair(pairId);
       setFeedback(`Bank entry ${copyId} deleted successfully.`);
       setTimeout(() => setFeedback(null), 4000);
     }
@@ -73,8 +75,13 @@ export const DuplicatesModule: React.FC = () => {
           </span>
           <div>
             <h1 className="text-xl font-bold font-serif text-slate-900">Duplicates Triage</h1>
-            <p className="text-xs text-slate-500">
-              System identifies suspected duplicates: Same Date (± 3 days) &bull; Same Party &bull; Amount (± 5)
+            <p className="text-xs text-slate-500 flex items-center gap-1.5 flex-wrap">
+              <span>System identifies suspected duplicates: Same Date (± 3 days) &bull; Same Party &bull; Amount (± 5)</span>
+              {dismissedDuplicatePairs.size > 0 && (
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  {dismissedDuplicatePairs.size} genuine pairs persisted in database
+                </span>
+              )}
             </p>
           </div>
         </div>

@@ -11,7 +11,6 @@ import { DuplicatesModule } from './components/modules/DuplicatesModule';
 import { PartyAliasesModule } from './components/modules/PartyAliasesModule';
 import { MatchModule } from './components/modules/MatchModule';
 import { ApprovalsModule } from './components/modules/ApprovalsModule';
-import { DiscrepanciesModule } from './components/modules/DiscrepanciesModule';
 import { PendingQueueModule } from './components/modules/PendingQueueModule';
 import { StatementUploadsModule } from './components/modules/StatementUploadsModule';
 import { StatementReconciliationModule } from './components/modules/StatementReconciliationModule';
@@ -30,7 +29,6 @@ const VALID_TABS: NavTab[] = [
   'aliases',
   'match',
   'approvals',
-  'discrepancies',
   'pending_queue',
   'statement_uploads',
   'statement_ledger',
@@ -120,7 +118,6 @@ const MainLayout: React.FC = () => {
             {activeTab === 'aliases' && <PartyAliasesModule />}
             {activeTab === 'match' && <MatchModule />}
             {activeTab === 'approvals' && <ApprovalsModule />}
-            {activeTab === 'discrepancies' && <DiscrepanciesModule onNavigateToMatch={() => setActiveTab('match')} />}
             {activeTab === 'pending_queue' && <PendingQueueModule />}
             {activeTab === 'statement_uploads' && <StatementUploadsModule />}
             {activeTab === 'statement_ledger' && <StatementReconciliationModule />}

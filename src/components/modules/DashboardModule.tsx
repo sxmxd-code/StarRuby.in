@@ -328,9 +328,9 @@ export const DashboardModule: React.FC<{ onNavigate: (tab: NavTab) => void }> = 
           </span>
         </div>
 
-        {/* Box 2: Pending Discrepancies */}
+        {/* Box 2: Pending Discrepancies & Unconfirmed Items */}
         <div
-          onClick={() => onNavigate('discrepancies')}
+          onClick={() => onNavigate('match')}
           className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:border-rose-300 cursor-pointer transition space-y-2"
         >
           <div className="flex items-center space-x-2 text-rose-800">
@@ -338,10 +338,10 @@ export const DashboardModule: React.FC<{ onNavigate: (tab: NavTab) => void }> = 
             <h3 className="font-bold text-sm">Attention List ({unconfirmedCount})</h3>
           </div>
           <p className="text-xs text-slate-500">
-            Unconfirmed transaction amounts and items proceeding without bank verification.
+            Unconfirmed transaction amounts and items requiring reconciliation.
           </p>
           <span className="text-xs text-rose-700 font-semibold hover:underline block pt-2">
-            Resolve Discrepancies &rarr;
+            Resolve in Match & Reconcile &rarr;
           </span>
         </div>
 

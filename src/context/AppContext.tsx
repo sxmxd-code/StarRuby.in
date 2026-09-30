@@ -131,11 +131,18 @@ interface AppContextType {
   
   closeInMatchTab: (userTxnId: string, linkedBankIds: string[], verifiedWithBank: 'Yes' | 'No', comment?: string) => void;
   moveDiscrepancyToOpen: (userTxnId: string, comment?: string) => void;
+  markTransactionAsQueried: (userTxnId: string, queryReason: string) => void;
   submitApproval: (userTxnId: string, layer: 1 | 2 | 3, decision: 'approved' | 'rejected', comment?: string) => { success: boolean; message: string };
+  
+  // Duplicates Triage Persistence
+  dismissedDuplicatePairs: Set<string>;
+  dismissDuplicatePair: (pairId: string) => void;
+  undismissDuplicatePair: (pairId: string) => void;
   
   addParty: (party: Omit<Party, 'id' | 'created_at'>, customId?: string) => Party;
   updateParty: (id: string, updates: Partial<Party>) => void;
   deleteParty: (id: string) => { success: boolean; error?: string };
+  mergeParties: (sourcePartyId: string, targetPartyId: string) => Promise<{ success: boolean; message: string }>;
   addPartyAliasTag: (partyId: string, aliasName: string) => void;
   removePartyAliasTag: (partyId: string, aliasName: string) => void;
   mapPartyAlias: (aliasId: string, partyId: string) => void;
@@ -248,6 +255,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [recordVersions, setRecordVersions] = useState<RecordVersion[]>(() => loadInitial('recordVersions', initialRecordVersions));
   const [passwordResetRequests, setPasswordResetRequests] = useState<PasswordResetRequest[]>(() => loadInitial('passwordResetRequests', []));
+  const [dismissedDuplicatePairs, setDismissedDuplicatePairs] = useState<Set<string>>(() => {
+    try {
+      const savedLocal = localStorage.getItem(`${LOCAL_STORAGE_KEY}_dismissedDuplicatePairs`);
+      if (savedLocal) {
+        return new Set(JSON.parse(savedLocal));
+      }
+      const loadedSettings = loadInitial<AppSetting[]>('appSettings', initialAppSettings);
+      const setting = loadedSettings.find(s => s.setting_key === 'dismissed_duplicate_pairs');
+      if (setting && setting.setting_value) {
+        return new Set(JSON.parse(setting.setting_value));
+      }
+    } catch (e) {
+      console.error('Error loading dismissedDuplicatePairs:', e);
+    }
+    return new Set<string>();
+  });
 
   const [isRealtimeConnected, setIsRealtimeConnected] = useState<boolean>(false);
   const [lastRealtimeNotice, setLastRealtimeNotice] = useState<string | null>(null);
@@ -413,6 +436,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (!setRes.error && setRes.data && setRes.data.length > 0) {
           setAppSettings(setRes.data);
           save('appSettings', setRes.data);
+          const dupSetting = setRes.data.find((s: any) => s.setting_key === 'dismissed_duplicate_pairs');
+          if (dupSetting && dupSetting.setting_value) {
+            try {
+              const pairArr = JSON.parse(dupSetting.setting_value);
+              setDismissedDuplicatePairs(new Set(pairArr));
+              localStorage.setItem(`${LOCAL_STORAGE_KEY}_dismissedDuplicatePairs`, JSON.stringify(pairArr));
+            } catch (e) {
+              console.error('Error parsing dismissed_duplicate_pairs from Supabase:', e);
+            }
+          }
         }
         if (!resetRes.error && Array.isArray(resetRes.data)) {
           setPasswordResetRequests(resetRes.data as PasswordResetRequest[]);
@@ -788,6 +821,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             save('appSettings', next);
             return next;
           });
+          if (row.setting_key === 'dismissed_duplicate_pairs' && row.setting_value) {
+            try {
+              const pairArr = JSON.parse(row.setting_value);
+              setDismissedDuplicatePairs(new Set(pairArr));
+              localStorage.setItem(`${LOCAL_STORAGE_KEY}_dismissedDuplicatePairs`, JSON.stringify(pairArr));
+            } catch (e) {
+              console.error('Error parsing realtime dismissed_duplicate_pairs:', e);
+            }
+          }
         }
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'password_reset_requests' }, (payload) => {
@@ -1314,6 +1356,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (supabase) {
       supabase.from('txn_bank_links').delete().eq('user_txn_id', userTxnId).eq('bank_txn_id', bankTxnId).then(() => {});
     }
+
+    // Inviolable Rule: If all bank statement links are removed, revert amount_confirmed to 'Unconfirmed'
+    const remainingLinks = updated.filter(l => l.user_txn_id === userTxnId);
+    if (remainingLinks.length === 0) {
+      const txn = userTransactions.find(t => t.id === userTxnId);
+      if (txn && txn.amount_confirmed === 'Confirmed') {
+        const updatedTxn = {
+          ...txn,
+          amount_confirmed: 'Unconfirmed' as const,
+          updated_at: new Date().toISOString(),
+        };
+        const deltas = createCellAuditDelta('transactions_user', userTxnId, txn, updatedTxn, currentUser.id, recordVersions);
+        if (deltas.length > 0) {
+          const updatedV = [...deltas, ...recordVersions];
+          setRecordVersions(updatedV);
+          save('recordVersions', updatedV);
+          if (supabase) {
+            supabase.from('record_versions').insert(deltas).then(() => {});
+          }
+        }
+        const updatedTxns = userTransactions.map(t => (t.id === userTxnId ? updatedTxn : t));
+        setUserTransactions(updatedTxns);
+        save('userTransactions', updatedTxns);
+        if (supabase) {
+          supabase.from('transactions_user').update({
+            amount_confirmed: 'Unconfirmed',
+            updated_at: updatedTxn.updated_at,
+          }).eq('id', userTxnId).then(() => {});
+        }
+        notifyRealtime(`All bank links removed: Transaction ${userTxnId} reverted to Unconfirmed.`);
+      }
+    }
   };
 
   // Operational Action 6: Match Tab Close (Layer 1 Approval)
@@ -1415,6 +1489,95 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (comment) {
       addComment(userTxnId, `[Moved to Open]: ${comment}`);
     }
+  };
+
+  const markTransactionAsQueried = (userTxnId: string, queryReason: string) => {
+    const txn = userTransactions.find(t => t.id === userTxnId);
+    if (!txn) return;
+
+    const updatedTxn = {
+      ...txn,
+      status: 'queried' as const,
+      updated_at: new Date().toISOString(),
+    };
+    const deltas = createCellAuditDelta('transactions_user', userTxnId, txn, updatedTxn, currentUser.id, recordVersions);
+    if (deltas.length > 0) {
+      const updatedV = [...deltas, ...recordVersions];
+      setRecordVersions(updatedV);
+      save('recordVersions', updatedV);
+      if (supabase) {
+        supabase.from('record_versions').insert(deltas).then(() => {});
+      }
+    }
+    const updatedTxns = userTransactions.map(t => (t.id === userTxnId ? updatedTxn : t));
+    setUserTransactions(updatedTxns);
+    save('userTransactions', updatedTxns);
+
+    if (supabase) {
+      supabase.from('transactions_user').update({
+        status: 'queried',
+        updated_at: updatedTxn.updated_at,
+      }).eq('id', userTxnId).then(() => {});
+    }
+
+    if (queryReason && queryReason.trim()) {
+      addComment(userTxnId, `[Query Raised]: ${queryReason.trim()}`);
+    }
+    notifyRealtime(`Transaction ${userTxnId} marked as Queried.`);
+  };
+
+  const dismissDuplicatePair = (pairId: string) => {
+    setDismissedDuplicatePairs(prev => {
+      const next = new Set(prev);
+      next.add(pairId);
+      const arr = Array.from(next);
+      localStorage.setItem(`${LOCAL_STORAGE_KEY}_dismissedDuplicatePairs`, JSON.stringify(arr));
+
+      setAppSettings(prevSettings => {
+        const existing = prevSettings.find(s => s.setting_key === 'dismissed_duplicate_pairs');
+        const updatedSetting: AppSetting = {
+          setting_key: 'dismissed_duplicate_pairs',
+          setting_value: JSON.stringify(arr),
+          description: 'Persisted dismissed duplicate transaction pair IDs',
+        };
+        const nextSettings = existing
+          ? prevSettings.map(s => (s.setting_key === 'dismissed_duplicate_pairs' ? updatedSetting : s))
+          : [...prevSettings, updatedSetting];
+        save('appSettings', nextSettings);
+        if (supabase) {
+          supabase.from('app_settings').upsert([updatedSetting], { onConflict: 'setting_key' }).then(() => {});
+        }
+        return nextSettings;
+      });
+      return next;
+    });
+  };
+
+  const undismissDuplicatePair = (pairId: string) => {
+    setDismissedDuplicatePairs(prev => {
+      const next = new Set(prev);
+      next.delete(pairId);
+      const arr = Array.from(next);
+      localStorage.setItem(`${LOCAL_STORAGE_KEY}_dismissedDuplicatePairs`, JSON.stringify(arr));
+
+      setAppSettings(prevSettings => {
+        const existing = prevSettings.find(s => s.setting_key === 'dismissed_duplicate_pairs');
+        if (existing) {
+          const updatedSetting: AppSetting = {
+            ...existing,
+            setting_value: JSON.stringify(arr),
+          };
+          const nextSettings = prevSettings.map(s => (s.setting_key === 'dismissed_duplicate_pairs' ? updatedSetting : s));
+          save('appSettings', nextSettings);
+          if (supabase) {
+            supabase.from('app_settings').upsert([updatedSetting], { onConflict: 'setting_key' }).then(() => {});
+          }
+          return nextSettings;
+        }
+        return prevSettings;
+      });
+      return next;
+    });
   };
 
   // Operational Action 7: 3-Layer Approvals Machine
@@ -2284,6 +2447,118 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
+  const mergeParties = async (sourcePartyId: string, targetPartyId: string): Promise<{ success: boolean; message: string }> => {
+    if (sourcePartyId === targetPartyId) {
+      return { success: false, message: 'Cannot merge a party into itself.' };
+    }
+    const source = parties.find(p => p.id === sourcePartyId);
+    const target = parties.find(p => p.id === targetPartyId);
+    if (!source || !target) {
+      return { success: false, message: 'Source or target party not found.' };
+    }
+
+    const sourceName = source.system_name || source.party_name;
+    const targetName = target.system_name || target.party_name;
+
+    // 1. Gather all raw aliases from source
+    const sourceAliases: string[] = Array.isArray(source.party_name_raw)
+      ? [...source.party_name_raw]
+      : source.party_name_raw
+      ? [source.party_name_raw]
+      : [];
+    if (source.party_name && !sourceAliases.includes(source.party_name)) {
+      sourceAliases.push(source.party_name);
+    }
+    if (source.system_name && !sourceAliases.includes(source.system_name)) {
+      sourceAliases.push(source.system_name);
+    }
+
+    const targetAliases: string[] = Array.isArray(target.party_name_raw)
+      ? [...target.party_name_raw]
+      : target.party_name_raw
+      ? [target.party_name_raw]
+      : [];
+    if (target.party_name && !targetAliases.includes(target.party_name)) {
+      targetAliases.push(target.party_name);
+    }
+    if (target.system_name && !targetAliases.includes(target.system_name)) {
+      targetAliases.push(target.system_name);
+    }
+
+    const combinedAliases = Array.from(new Set([...targetAliases, ...sourceAliases]));
+
+    // 2. Update target party with merged aliases
+    const updatedTarget: Party = {
+      ...target,
+      party_name_raw: combinedAliases,
+    };
+    const nextParties = parties.filter(p => p.id !== sourcePartyId).map(p => (p.id === targetPartyId ? updatedTarget : p));
+    setParties(nextParties);
+    save('parties', nextParties);
+
+    // 3. Remap all user transactions pointing to sourcePartyId to targetPartyId
+    const updatedTxns = userTransactions.map(t => {
+      if (t.party_id === sourcePartyId) {
+        return {
+          ...t,
+          party_id: targetPartyId,
+          party_name: targetName,
+          updated_at: new Date().toISOString(),
+        };
+      }
+      return t;
+    });
+    setUserTransactions(updatedTxns);
+    save('userTransactions', updatedTxns);
+
+    // 4. Remap all partyAliases pointing to sourcePartyId to targetPartyId
+    const updatedPartyAliases = partyAliases.map(a => {
+      if (a.party_id === sourcePartyId) {
+        return { ...a, party_id: targetPartyId, status: 'mapped' as const };
+      }
+      return a;
+    });
+    setPartyAliases(updatedPartyAliases);
+    save('partyAliases', updatedPartyAliases);
+
+    // 5. Remap party templates
+    const updatedTemplates = partyTemplates.map(tpl => {
+      if (tpl.party_id === sourcePartyId) {
+        return { ...tpl, party_id: targetPartyId };
+      }
+      return tpl;
+    });
+    setPartyTemplates(updatedTemplates);
+    save('partyTemplates', updatedTemplates);
+
+    // 6. Record audit delta
+    const delta = createCellAuditDelta('parties', targetPartyId, target, updatedTarget, currentUser.id, recordVersions);
+    if (delta.length > 0) {
+      const nextVersions = [...delta, ...recordVersions];
+      setRecordVersions(nextVersions);
+      save('recordVersions', nextVersions);
+      if (supabase) {
+        supabase.from('record_versions').insert(delta).then(() => {});
+      }
+    }
+
+    // 7. Supabase write-through
+    if (supabase) {
+      try {
+        await supabase.from('parties').update({ party_name_raw: combinedAliases }).eq('id', targetPartyId);
+        await supabase.from('transactions_user').update({ party_id: targetPartyId, party_name: targetName, updated_at: new Date().toISOString() }).eq('party_id', sourcePartyId);
+        await supabase.from('party_aliases').update({ party_id: targetPartyId, status: 'mapped' }).eq('party_id', sourcePartyId);
+        await supabase.from('party_description_templates').update({ party_id: targetPartyId }).eq('party_id', sourcePartyId);
+        await supabase.from('parties').delete().eq('id', sourcePartyId);
+      } catch (err) {
+        console.error('Error syncing party merge to Supabase:', err);
+      }
+    }
+
+    notifyRealtime(`Merged "${sourceName}" into "${targetName}" successfully.`);
+    return { success: true, message: `Successfully merged "${sourceName}" into "${targetName}".` };
+  };
+
   const addPartyAliasTag = (partyId: string, aliasName: string) => {
     const party = parties.find(p => p.id === partyId);
     if (!party || !aliasName.trim()) return;
@@ -3105,7 +3380,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         unlinkTxnBank,
         closeInMatchTab,
         moveDiscrepancyToOpen,
+        markTransactionAsQueried,
         submitApproval,
+        dismissedDuplicatePairs,
+        dismissDuplicatePair,
+        undismissDuplicatePair,
+        mergeParties,
         addParty,
         updateParty,
         deleteParty,
