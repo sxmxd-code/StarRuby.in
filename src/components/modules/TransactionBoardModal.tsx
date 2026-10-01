@@ -24,8 +24,12 @@ import {
   History,
   RotateCcw,
   Trash2,
+  Edit3,
+  Save,
+  ExternalLink,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
+import { BankTransactionBoardModal } from './BankTransactionBoardModal';
 
 interface TransactionBoardModalProps {
   transaction: UserTransaction;
@@ -39,7 +43,9 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
     allUsers,
     accounts,
     companies,
+    parties,
     partiesMap,
+    userTransactions,
     bankTransactions,
     txnBankLinks,
     unlinkTxnBank,
@@ -50,16 +56,41 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
     attachDocument,
     deleteDocument,
     submitApproval,
+    updateUserTransaction,
     updateUserTransactionCell,
     recordVersions,
+    restoreCellVersion,
     moveDiscrepancyToOpen,
     markTransactionAsQueried,
   } = useApp();
+
+  // Active real-time transaction from AppContext
+  const currentTxn = userTransactions.find(t => t.id === transaction.id) || transaction;
 
   const [newComment, setNewComment] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [approvalFeedback, setApprovalFeedback] = useState<string | null>(null);
   const [approvalComment, setApprovalComment] = useState('');
+  const [restoringVersionId, setRestoringVersionId] = useState<number | null>(null);
+  const [viewingBankTxn, setViewingBankTxn] = useState<BankTransaction | null>(null);
+
+  // Inline Transaction Editing State
+  const [isEditingTxn, setIsEditingTxn] = useState(false);
+  const [editPartyId, setEditPartyId] = useState(currentTxn.party_id || '');
+  const [editAmount, setEditAmount] = useState(String(currentTxn.amount));
+  const [editDate, setEditDate] = useState(currentTxn.date_of_transaction);
+  const [editDescription, setEditDescription] = useState(currentTxn.description || '');
+  const [editDirection, setEditDirection] = useState(currentTxn.direction);
+  const [editExchangeRate, setEditExchangeRate] = useState(String(currentTxn.exchange_rate || 1));
+
+  useEffect(() => {
+    setEditPartyId(currentTxn.party_id || '');
+    setEditAmount(String(currentTxn.amount));
+    setEditDate(currentTxn.date_of_transaction);
+    setEditDescription(currentTxn.description || '');
+    setEditDirection(currentTxn.direction);
+    setEditExchangeRate(String(currentTxn.exchange_rate || 1));
+  }, [currentTxn]);
 
   // Lock body & main scrolling while board modal is open
   useBodyScrollLock(true);
@@ -76,38 +107,90 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
   }, [onClose]);
 
   // Find Account & Company
-  const account = accounts.find(a => a.id === transaction.account_id);
+  const account = accounts.find(a => a.id === currentTxn.account_id);
   const company = account ? companies.find(c => c.id === account.company_id) : null;
-  const party = transaction.party_id ? partiesMap.get(transaction.party_id) : null;
+  const party = currentTxn.party_id ? partiesMap.get(currentTxn.party_id) : null;
 
   // Find Linked Bank Transactions
-  const linkedLinks = txnBankLinks.filter(l => l.user_txn_id === transaction.id);
+  const linkedLinks = txnBankLinks.filter(l => l.user_txn_id === currentTxn.id);
   const linkedBankTxns = bankTransactions.filter(b => linkedLinks.some(l => l.bank_txn_id === b.id));
 
   // Find Documents
-  const txnDocs = documents.filter(d => d.user_txn_id === transaction.id);
+  const txnDocs = documents.filter(d => d.user_txn_id === currentTxn.id);
 
   // Find Approvals
-  const txnApprovals = approvals.filter(a => a.user_txn_id === transaction.id);
+  const txnApprovals = approvals.filter(a => a.user_txn_id === currentTxn.id);
   const layer1 = txnApprovals.find(a => a.layer === 1 && a.decision === 'approved');
   const layer2 = txnApprovals.find(a => a.layer === 2 && a.decision === 'approved');
   const layer3 = txnApprovals.find(a => a.layer === 3 && a.decision === 'approved');
 
   // Find Comments
-  const txnComments = comments.filter(c => c.user_txn_id === transaction.id);
+  const txnComments = comments.filter(c => c.user_txn_id === currentTxn.id);
 
   // Find Cell-Level Audit Versions
   const txnVersions = useMemo(() => {
     return recordVersions
-      .filter(v => v.table_name === 'transactions_user' && v.record_id === transaction.id)
+      .filter(v => v.table_name === 'transactions_user' && v.record_id === currentTxn.id)
       .sort((a, b) => new Date(b.changed_at).getTime() - new Date(a.changed_at).getTime());
-  }, [recordVersions, transaction.id]);
+  }, [recordVersions, currentTxn.id]);
+
+  const handleSaveTxnEdits = (e: React.FormEvent) => {
+    e.preventDefault();
+    const amt = parseFloat(editAmount) || 0;
+    const rate = parseFloat(editExchangeRate) || 1;
+    const inrAmt = currentTxn.currency === 'INR' ? amt : amt * rate;
+    const selectedParty = editPartyId ? parties.find(p => p.id === editPartyId) : undefined;
+
+    updateUserTransaction(currentTxn.id, {
+      party_id: editPartyId || undefined,
+      party_name_raw: selectedParty?.system_name || currentTxn.party_name_raw,
+      amount: amt,
+      currency: currentTxn.currency,
+      amount_in_inr: inrAmt,
+      exchange_rate: rate,
+      date_of_transaction: editDate,
+      direction: editDirection as 'Payment' | 'Receipt',
+      description: editDescription.trim(),
+    });
+
+    setIsEditingTxn(false);
+    setApprovalFeedback(`Transaction ${currentTxn.id} updated. Audit delta recorded.`);
+    setTimeout(() => setApprovalFeedback(null), 4000);
+  };
+
+  const handleRestoreVersion = (versionId: number) => {
+    if (currentRole !== 'Admin') {
+      setApprovalFeedback('Unauthorized: Only Administrators have permission to restore historical versions.');
+      setTimeout(() => setApprovalFeedback(null), 4000);
+      return;
+    }
+
+    const targetVer = recordVersions.find(v => v.id === versionId);
+    if (!targetVer) return;
+
+    if (
+      !window.confirm(
+        `Are you sure you want to restore "${targetVer.column_name}" back to "${targetVer.old_value || '(empty)'}"? A new version row will be created recording this restore.`
+      )
+    ) {
+      return;
+    }
+
+    setRestoringVersionId(versionId);
+    try {
+      const res = restoreCellVersion(versionId);
+      setApprovalFeedback(res.message);
+      setTimeout(() => setApprovalFeedback(null), 4000);
+    } finally {
+      setRestoringVersionId(null);
+    }
+  };
 
   const handleSendComment = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newComment.trim()) return;
 
-    addComment(transaction.id, newComment.trim());
+    addComment(currentTxn.id, newComment.trim());
     setNewComment('');
   };
 
@@ -272,85 +355,197 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
             
             {/* Left Box: Entered Details */}
             <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-4">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-rose-800 border-b pb-2 flex items-center justify-between">
-                <span>User Transaction Details</span>
-                <span className="text-[11px] text-slate-500 font-normal">Source of Truth</span>
-              </h3>
+              <div className="border-b pb-2 flex items-center justify-between">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-rose-800 flex items-center space-x-1.5">
+                  <FileText className="w-3.5 h-3.5 text-rose-600" />
+                  <span>User Transaction Details</span>
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setIsEditingTxn(!isEditingTxn)}
+                  className="text-xs font-semibold text-rose-700 hover:text-rose-900 flex items-center space-x-1 cursor-pointer"
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                  <span>{isEditingTxn ? 'Cancel Edit' : 'Edit Details'}</span>
+                </button>
+              </div>
 
-              <div className="grid grid-cols-2 gap-y-3 text-xs">
-                <div>
-                  <span className="text-slate-400 block text-[10px] uppercase">Party / Payer</span>
-                  <span className="font-semibold text-slate-900">{party?.system_name || transaction.party_name_raw}</span>
-                  {party?.group_name ? (
-                    <span className="text-[10px] text-slate-500 block">Group: {party.group_name}</span>
-                  ) : null}
-                  {party?.cid_number ? (
-                    <span className="inline-block mt-0.5 px-1.5 py-0.2 bg-purple-100 text-purple-800 text-[10px] font-bold rounded">
-                      CID: {party.cid_number}
+              {!isEditingTxn ? (
+                <div className="grid grid-cols-2 gap-y-3 text-xs">
+                  <div>
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold">Party / Payer</span>
+                    <span className="font-semibold text-slate-900">{party?.system_name || currentTxn.party_name_raw}</span>
+                    {party?.group_name ? (
+                      <span className="text-[10px] text-slate-500 block">Group: {party.group_name}</span>
+                    ) : null}
+                    {party?.cid_number ? (
+                      <span className="inline-block mt-0.5 px-1.5 py-0.2 bg-purple-100 text-purple-800 text-[10px] font-bold rounded">
+                        CID: {party.cid_number}
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <div>
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold">Amount & Currency</span>
+                    <span className="text-base font-bold text-slate-900 tabular-nums">
+                      {formatCurrencyAmount(currentTxn.amount, currentTxn.currency)}
                     </span>
-                  ) : null}
-                </div>
+                    {currentTxn.amount_in_inr && currentTxn.currency !== 'INR' ? (
+                      <span className="text-[11px] text-slate-500 block tabular-nums">
+                        (INR ~₹{currentTxn.amount_in_inr.toLocaleString(undefined, { minimumFractionDigits: 2 })})
+                      </span>
+                    ) : null}
+                  </div>
 
-                <div>
-                  <span className="text-slate-400 block text-[10px] uppercase">Amount & Currency</span>
-                  <span className="text-base font-bold text-slate-900 tabular-nums">
-                    {formatCurrencyAmount(transaction.amount, transaction.currency)}
-                  </span>
-                  {transaction.amount_in_inr ? (
-                    <span className="text-[11px] text-slate-500 block tabular-nums">
-                      (INR ~₹{transaction.amount_in_inr.toLocaleString(undefined, { minimumFractionDigits: 2 })})
-                    </span>
-                  ) : null}
-                </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold">Date of Transaction</span>
+                    <span className="font-medium text-slate-800">{formatDisplayDate(currentTxn.date_of_transaction)}</span>
+                  </div>
 
-                <div>
-                  <span className="text-slate-400 block text-[10px] uppercase">Date of Transaction</span>
-                  <span className="font-medium text-slate-800">{formatDisplayDate(transaction.date_of_transaction)}</span>
-                </div>
-
-                <div>
-                  <span className="text-slate-400 block text-[10px] uppercase">Direction</span>
-                  <span className={`inline-block mt-0.5 px-2 py-0.5 text-[10px] font-bold rounded ${
-                    transaction.direction === 'Payment' ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
-                  }`}>
-                    {transaction.direction}
-                  </span>
-                </div>
-
-                <div className="col-span-2">
-                  <span className="text-slate-400 block text-[10px] uppercase">Description / Note</span>
-                  <p className="text-slate-800 italic mt-0.5">{transaction.description || '—'}</p>
-                </div>
-
-                <div>
-                  <span className="text-slate-400 block text-[10px] uppercase">Bank Verified Flag</span>
-                  <span className={`inline-block mt-0.5 px-2 py-0.5 text-[10px] font-bold rounded ${
-                    transaction.verified_with_bank === 'Yes' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'
-                  }`}>
-                    {transaction.verified_with_bank}
-                  </span>
-                </div>
-
-                <div>
-                  <span className="text-slate-400 block text-[10px] uppercase">Amount Status</span>
-                  <div className="flex items-center space-x-2 mt-1">
-                    <span className={`px-2 py-0.5 text-xs font-bold rounded ${
-                      transaction.amount_confirmed === 'Confirmed' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                  <div>
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold">Direction</span>
+                    <span className={`inline-block mt-0.5 px-2 py-0.5 text-[10px] font-bold rounded ${
+                      currentTxn.direction === 'Payment' ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
                     }`}>
-                      {transaction.amount_confirmed}
+                      {currentTxn.direction}
                     </span>
-                    <button
-                      onClick={() => {
-                        const nextVal = transaction.amount_confirmed === 'Confirmed' ? 'Unconfirmed' : 'Confirmed';
-                        updateUserTransactionCell(transaction.id, 'amount_confirmed', nextVal);
-                      }}
-                      className="text-[10px] text-rose-700 hover:underline cursor-pointer"
-                    >
-                      Change
-                    </button>
+                  </div>
+
+                  <div className="col-span-2">
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold">Description / Note</span>
+                    <p className="text-slate-800 italic mt-0.5">{currentTxn.description || '—'}</p>
+                  </div>
+
+                  <div>
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold">Bank Verified Flag</span>
+                    <span className={`inline-block mt-0.5 px-2 py-0.5 text-[10px] font-bold rounded ${
+                      currentTxn.verified_with_bank === 'Yes' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'
+                    }`}>
+                      {currentTxn.verified_with_bank}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold">Amount Status</span>
+                    <div className="flex items-center space-x-2 mt-1">
+                      <span className={`px-2 py-0.5 text-xs font-bold rounded ${
+                        currentTxn.amount_confirmed === 'Confirmed' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                      }`}>
+                        {currentTxn.amount_confirmed}
+                      </span>
+                      <button
+                        onClick={() => {
+                          const nextVal = currentTxn.amount_confirmed === 'Confirmed' ? 'Unconfirmed' : 'Confirmed';
+                          updateUserTransactionCell(currentTxn.id, 'amount_confirmed', nextVal);
+                        }}
+                        className="text-[10px] text-rose-700 hover:underline cursor-pointer"
+                      >
+                        Toggle
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
+              ) : (
+                <form onSubmit={handleSaveTxnEdits} className="space-y-3 text-xs">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-600 uppercase block mb-1">Party / Payer</label>
+                    <select
+                      value={editPartyId}
+                      onChange={e => setEditPartyId(e.target.value)}
+                      className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-xs"
+                      required
+                    >
+                      <option value="">Select Party</option>
+                      {parties.map(p => (
+                        <option key={p.id} value={p.id}>
+                          {p.system_name} {p.group_name ? `(${p.group_name})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 uppercase block mb-1">
+                        Amount ({currentTxn.currency})
+                      </label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={editAmount}
+                        onChange={e => setEditAmount(e.target.value)}
+                        className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg font-mono text-xs"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 uppercase block mb-1">Direction</label>
+                      <select
+                        value={editDirection}
+                        onChange={e => setEditDirection(e.target.value as 'Payment' | 'Receipt')}
+                        className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-xs"
+                      >
+                        <option value="Payment">Payment</option>
+                        <option value="Receipt">Receipt</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 uppercase block mb-1">Transaction Date</label>
+                      <input
+                        type="date"
+                        value={editDate}
+                        onChange={e => setEditDate(e.target.value)}
+                        className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-xs"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 uppercase block mb-1">Exchange Rate to INR</label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={editExchangeRate}
+                        onChange={e => setEditExchangeRate(e.target.value)}
+                        className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg font-mono text-xs"
+                        disabled={currentTxn.currency === 'INR'}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-600 uppercase block mb-1">Description / Note</label>
+                    <input
+                      type="text"
+                      value={editDescription}
+                      onChange={e => setEditDescription(e.target.value)}
+                      placeholder="Add transaction note or purpose..."
+                      className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-xs"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-end space-x-2 pt-2 border-t">
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingTxn(false)}
+                      className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-4 py-1.5 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 shadow-xs cursor-pointer"
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                      <span>Save & Log Version</span>
+                    </button>
+                  </div>
+                </form>
+              )}
             </div>
 
             {/* Right Box: Linked Bank Entries (Supporting Data) */}
@@ -373,8 +568,8 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
               ) : (
                 <div className="space-y-2">
                   {linkedBankTxns.map((b) => (
-                    <div key={b.id} className="p-2.5 rounded-lg border border-blue-100 bg-blue-50/50 text-xs flex items-start justify-between">
-                      <div>
+                    <div key={b.id} className="p-2.5 rounded-lg border border-blue-100 bg-blue-50/50 text-xs flex items-start justify-between gap-2 hover:bg-blue-50/80 transition">
+                      <div className="space-y-0.5">
                         <div className="flex items-center space-x-2">
                           <span className="font-bold text-blue-950 font-mono">{b.id}</span>
                           <span className="text-[11px] text-slate-500 font-sans">{formatDisplayDate(b.value_date)}</span>
@@ -382,17 +577,29 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
                             {b.debit > 0 ? `Debit: -${b.debit.toFixed(2)}` : `Credit: +${b.credit.toFixed(2)}`}
                           </span>
                         </div>
-                        <p className="text-[11px] text-slate-700 mt-1 line-clamp-1 font-mono">{b.narration}</p>
+                        <p className="text-[11px] text-slate-700 line-clamp-1 font-mono">{b.narration}</p>
                         {b.reference_no && <span className="text-[10px] text-slate-500">Ref: {b.reference_no}</span>}
                       </div>
 
-                      <button
-                        onClick={() => unlinkTxnBank(transaction.id, b.id)}
-                        className="text-slate-400 hover:text-rose-700 p-1 cursor-pointer"
-                        title="Unlink bank line"
-                      >
-                        <Unlink className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center space-x-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setViewingBankTxn(b)}
+                          className="px-2 py-1 bg-white hover:bg-blue-100 text-blue-800 border border-blue-200 rounded text-[11px] font-semibold inline-flex items-center space-x-1 cursor-pointer shadow-2xs transition"
+                          title="Open Bank Statement Line Board"
+                        >
+                          <ExternalLink className="w-3 h-3 text-blue-600" />
+                          <span>Board</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => unlinkTxnBank(currentTxn.id, b.id)}
+                          className="text-slate-400 hover:text-rose-700 p-1 rounded hover:bg-rose-50 cursor-pointer transition"
+                          title="Unlink bank line"
+                        >
+                          <Unlink className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -572,36 +779,70 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
                 <History className="w-4 h-4 text-blue-600" />
                 <span>Transaction Audit Trail & Version History ({txnVersions.length})</span>
               </h4>
-              <span className="text-[10px] text-slate-400 font-normal">Cell mutations with old &rarr; new values</span>
+              <span className="text-[10px] text-slate-400 font-normal">
+                Realtime database mutations &bull; 1-click Admin restore
+              </span>
             </div>
 
             {txnVersions.length === 0 ? (
-              <p className="text-slate-400 text-xs italic">No modification history recorded yet for this transaction.</p>
+              <p className="text-slate-400 text-xs italic py-2">No modification history recorded yet for this transaction.</p>
             ) : (
-              <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+              <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                 {txnVersions.map(v => {
                   const author = allUsers.find(u => u.id === v.changed_by);
                   return (
-                    <div key={v.id} className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-xs space-y-1">
+                    <div
+                      key={v.id}
+                      className="p-3 rounded-xl bg-slate-50 border border-slate-200/90 text-xs space-y-2 hover:bg-slate-100/60 transition"
+                    >
                       <div className="flex items-center justify-between text-[11px]">
                         <div className="flex items-center space-x-2">
-                          <span className="font-bold text-slate-800 font-mono text-[10px] bg-slate-200 px-1.5 py-0.5 rounded">
-                            {v.column_name}
+                          <span className="font-bold text-slate-800 font-mono text-[10px] bg-slate-200 px-2 py-0.5 rounded border border-slate-300/80">
+                            #{v.id} &bull; {v.column_name}
                           </span>
-                          <span className="text-slate-600">by {author ? author.full_name : v.changed_by}</span>
+                          <span className="text-slate-600 font-medium">
+                            by <strong className="text-slate-800">{author ? author.full_name : v.changed_by}</strong>
+                          </span>
                         </div>
                         <span className="text-slate-400 font-mono text-[10px]">
                           {formatDisplayDateTime(v.changed_at)}
                         </span>
                       </div>
-                      <div className="flex items-center space-x-2 font-mono text-[11px]">
-                        <span className="text-rose-700 line-through bg-rose-50 px-1.5 py-0.5 rounded">
-                          {v.old_value !== undefined && v.old_value !== '' ? String(v.old_value) : '(empty)'}
-                        </span>
-                        <span className="text-slate-400">&rarr;</span>
-                        <span className="text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded">
-                          {v.new_value !== undefined && v.new_value !== '' ? String(v.new_value) : '(empty)'}
-                        </span>
+
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center space-x-2 font-mono text-[11px] overflow-hidden">
+                          <span
+                            className="text-rose-700 line-through bg-rose-50 px-2 py-0.5 rounded border border-rose-200 truncate max-w-[240px]"
+                            title={v.old_value}
+                          >
+                            {v.old_value !== undefined && v.old_value !== '' ? String(v.old_value) : '(empty)'}
+                          </span>
+                          <span className="text-slate-400 shrink-0">&rarr;</span>
+                          <span
+                            className="text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 truncate max-w-[240px]"
+                            title={v.new_value}
+                          >
+                            {v.new_value !== undefined && v.new_value !== '' ? String(v.new_value) : '(empty)'}
+                          </span>
+                        </div>
+
+                        {/* Admin 1-Click Restore Action */}
+                        <div>
+                          {currentRole === 'Admin' ? (
+                            <button
+                              type="button"
+                              onClick={() => handleRestoreVersion(v.id)}
+                              disabled={restoringVersionId === v.id || v.column_name.includes('DELETED')}
+                              className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 rounded-lg text-[11px] font-bold inline-flex items-center space-x-1.5 transition cursor-pointer shadow-2xs disabled:opacity-50"
+                              title={`Restore ${v.column_name} to "${v.old_value}"`}
+                            >
+                              <RotateCcw className={`w-3 h-3 ${restoringVersionId === v.id ? 'animate-spin' : ''}`} />
+                              <span>{restoringVersionId === v.id ? 'Restoring...' : 'Restore'}</span>
+                            </button>
+                          ) : (
+                            <span className="text-[10px] text-slate-400 italic">Admin only</span>
+                          )}
+                        </div>
                       </div>
                     </div>
                   );
@@ -623,6 +864,14 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
         </div>
 
       </div>
+
+      {/* Linked Bank Transaction Board Inspection */}
+      {viewingBankTxn && (
+        <BankTransactionBoardModal
+          bankTransaction={viewingBankTxn}
+          onClose={() => setViewingBankTxn(null)}
+        />
+      )}
     </div>,
     document.body
   );

@@ -123,6 +123,8 @@ interface AppContextType {
   
   addBankTransaction: (txn: Omit<BankTransaction, 'id' | 'created_by' | 'created_at' | 'updated_at'>) => BankTransaction;
   addBankTransactionsBatch: (txns: Omit<BankTransaction, 'id' | 'created_by' | 'created_at' | 'updated_at'>[]) => BankTransaction[];
+  updateBankTransaction: (id: string, updates: Partial<BankTransaction>) => void;
+  updateBankTransactionCell: (id: string, column: keyof BankTransaction, value: any) => void;
   deleteBankTransaction: (id: string, reason: string) => boolean;
   deleteBankTransactionsBatch: (txnIds: string[]) => void;
   
@@ -717,10 +719,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'record_versions' }, (payload) => {
-        if (payload.eventType === 'INSERT') {
+        if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
           const row = payload.new as RecordVersion;
           setRecordVersions(prev => {
             const next = [row, ...prev.filter(v => v.id !== row.id)];
+            save('recordVersions', next);
+            return next;
+          });
+        } else if (payload.eventType === 'DELETE') {
+          const oldId = (payload.old as any).id;
+          setRecordVersions(prev => {
+            const next = prev.filter(v => v.id !== oldId);
             save('recordVersions', next);
             return next;
           });
@@ -1277,6 +1286,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     notifyRealtime(`Live Sync: Imported ${newTxns.length} bank statement transactions`);
     return newTxns;
+  };
+
+  const updateBankTransactionCell = (id: string, column: keyof BankTransaction, value: any) => {
+    const existing = bankTransactions.find(t => t.id === id);
+    if (!existing) return;
+
+    const updated = { ...existing, [column]: value, updated_at: new Date().toISOString() };
+    const deltas = createCellAuditDelta('transactions_bank', id, existing, updated, currentUser.id, recordVersions);
+
+    if (deltas.length > 0) {
+      const updatedVersions = [...deltas, ...recordVersions];
+      setRecordVersions(updatedVersions);
+      save('recordVersions', updatedVersions);
+      if (supabase) {
+        supabase.from('record_versions').insert(deltas).then(() => {});
+      }
+    }
+
+    const updatedTxns = bankTransactions.map(t => (t.id === id ? updated : t));
+    setBankTransactions(updatedTxns);
+    save('bankTransactions', updatedTxns);
+
+    if (supabase) {
+      supabase.from('transactions_bank').update({ [column]: value, updated_at: updated.updated_at }).eq('id', id).then(() => {});
+    }
+  };
+
+  const updateBankTransaction = (id: string, updates: Partial<BankTransaction>) => {
+    const existing = bankTransactions.find(t => t.id === id);
+    if (!existing) return;
+
+    const updated = { ...existing, ...updates, updated_at: new Date().toISOString() };
+    const deltas = createCellAuditDelta('transactions_bank', id, existing, updated, currentUser.id, recordVersions);
+
+    if (deltas.length > 0) {
+      const updatedVersions = [...deltas, ...recordVersions];
+      setRecordVersions(updatedVersions);
+      save('recordVersions', updatedVersions);
+      if (supabase) {
+        supabase.from('record_versions').insert(deltas).then(() => {});
+      }
+    }
+
+    const updatedTxns = bankTransactions.map(t => (t.id === id ? updated : t));
+    setBankTransactions(updatedTxns);
+    save('bankTransactions', updatedTxns);
+
+    if (supabase) {
+      supabase.from('transactions_bank').update(updates).eq('id', id).then(() => {});
+    }
   };
 
   const deleteBankTransaction = (id: string, reason: string): boolean => {
@@ -3106,8 +3165,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Operational Action 13: 1-Click Restore Cell Version
+  // Operational Action 13: 1-Click Restore Cell Version (Admin Protected)
   const restoreCellVersion = (versionId: number): { success: boolean; message: string } => {
+    if (currentRole !== 'Admin') {
+      return { success: false, message: 'Only Administrators have permission to restore historical cell versions.' };
+    }
+
     const targetVersion = recordVersions.find(v => v.id === versionId);
     if (!targetVersion) return { success: false, message: 'Version record not found.' };
 
@@ -3115,22 +3178,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (table_name === 'transactions_user') {
       const txn = userTransactions.find(t => t.id === record_id);
-      if (!txn) return { success: false, message: 'Target transaction no longer exists.' };
+      if (!txn) return { success: false, message: `Target transaction ${record_id} no longer exists.` };
 
-      // Restore cell
-      updateUserTransactionCell(record_id, column_name as keyof UserTransaction, old_value);
-      return { success: true, message: `Successfully restored ${column_name} of ${record_id} to "${old_value}".` };
+      // Restore cell (convert value types appropriately)
+      let parsedValue: any = old_value ?? '';
+      if (column_name === 'amount' || column_name === 'amount_in_inr' || column_name === 'exchange_rate') {
+        parsedValue = parseFloat(old_value || '0') || 0;
+      }
+      updateUserTransactionCell(record_id, column_name as keyof UserTransaction, parsedValue);
+      notifyRealtime(`Admin restored ${column_name} of transaction ${record_id} to "${old_value ?? ''}".`);
+      return { success: true, message: `Successfully restored ${column_name} of transaction ${record_id} to "${old_value ?? ''}".` };
+    }
+
+    if (table_name === 'transactions_bank') {
+      const txn = bankTransactions.find(t => t.id === record_id);
+      if (!txn) return { success: false, message: `Target bank statement line ${record_id} no longer exists.` };
+
+      let parsedValue: any = old_value ?? '';
+      if (column_name === 'debit' || column_name === 'credit' || column_name === 'balance_after') {
+        parsedValue = parseFloat(old_value || '0') || 0;
+      }
+      updateBankTransactionCell(record_id, column_name as keyof BankTransaction, parsedValue);
+      notifyRealtime(`Admin restored ${column_name} of bank line ${record_id} to "${old_value ?? ''}".`);
+      return { success: true, message: `Successfully restored ${column_name} of bank transaction ${record_id} to "${old_value ?? ''}".` };
     }
 
     if (table_name === 'parties') {
       const party = parties.find(p => p.id === record_id);
-      if (!party) return { success: false, message: 'Target party no longer exists.' };
+      if (!party) return { success: false, message: `Target party ${record_id} no longer exists.` };
 
       updateParty(record_id, { [column_name]: old_value });
-      return { success: true, message: `Successfully restored ${column_name} of ${record_id} to "${old_value}".` };
+      return { success: true, message: `Successfully restored ${column_name} of party ${record_id} to "${old_value}".` };
     }
 
-    return { success: false, message: `Restore for table ${table_name} completed.` };
+    return { success: false, message: `Restore for table ${table_name} not supported.` };
   };
 
   const updateAppSetting = (key: string, value: string) => {
@@ -3374,6 +3455,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateUserTransactionCell,
         addBankTransaction,
         addBankTransactionsBatch,
+        updateBankTransaction,
+        updateBankTransactionCell,
         deleteBankTransaction,
         deleteBankTransactionsBatch,
         linkTxnBank,

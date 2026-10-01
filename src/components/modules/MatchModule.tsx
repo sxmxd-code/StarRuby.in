@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { TransactionBoardModal } from './TransactionBoardModal';
+import { BankTransactionBoardModal } from './BankTransactionBoardModal';
 
 export const MatchModule: React.FC = () => {
   const {
@@ -46,6 +47,7 @@ export const MatchModule: React.FC = () => {
 
   // Transaction Board Modal state
   const [boardTxn, setBoardTxn] = useState<UserTransaction | null>(null);
+  const [bankBoardTxn, setBankBoardTxn] = useState<BankTransaction | null>(null);
 
   // Filter user transactions that need matching or are open/in_approval
   const [selectedTxnId, setSelectedTxnId] = useState<string | null>(null);
@@ -504,18 +506,32 @@ export const MatchModule: React.FC = () => {
                               <span className="text-[11px] text-slate-500">{formatDisplayDate(c.bankTxn.value_date)}</span>
                             </div>
 
-                            {/* Confidence Badge */}
-                            <span
-                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                c.confidenceScore >= 80
-                                  ? 'bg-emerald-100 text-emerald-800'
-                                  : c.confidenceScore >= 50
-                                  ? 'bg-amber-100 text-amber-800'
-                                  : 'bg-slate-100 text-slate-700'
-                              }`}
-                            >
-                              {c.confidenceScore}% Confidence
-                            </span>
+                            {/* Confidence Badge & Bank Board Trigger */}
+                            <div className="flex items-center space-x-2">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setBankBoardTxn(c.bankTxn);
+                                }}
+                                className="px-1.5 py-0.5 rounded bg-slate-100 hover:bg-blue-100 text-blue-800 text-[10px] font-semibold flex items-center space-x-1 cursor-pointer transition"
+                                title="Open Bank Statement Board"
+                              >
+                                <Landmark className="w-2.5 h-2.5 text-blue-700" />
+                                <span>Board</span>
+                              </button>
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                  c.confidenceScore >= 80
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : c.confidenceScore >= 50
+                                    ? 'bg-amber-100 text-amber-800'
+                                    : 'bg-slate-100 text-slate-700'
+                                }`}
+                              >
+                                {c.confidenceScore}% Confidence
+                              </span>
+                            </div>
                           </div>
 
                           <div className="flex items-center justify-between">
@@ -725,9 +741,23 @@ export const MatchModule: React.FC = () => {
                           {isDebit ? 'Payment (Debit)' : 'Receipt (Credit)'}
                         </span>
 
-                        <span className="font-mono font-bold text-xs text-slate-900 tabular-nums">
-                          {formatCurrencyAmount(bAmount, b.currency)}
-                        </span>
+                        <div className="flex items-center space-x-2">
+                          <span className="font-mono font-bold text-xs text-slate-900 tabular-nums">
+                            {formatCurrencyAmount(bAmount, b.currency)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setBankBoardTxn(b);
+                            }}
+                            className="px-2 py-0.5 rounded bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-slate-600 font-semibold flex items-center space-x-1 cursor-pointer transition text-[10px]"
+                            title="Open Bank Statement Board"
+                          >
+                            <Landmark className="w-3 h-3 text-blue-700" />
+                            <span>Board</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
@@ -747,12 +777,23 @@ export const MatchModule: React.FC = () => {
                       <span className="font-bold text-blue-800 text-sm font-mono">{selectedBankTxn.id}</span>
                       <span className="text-xs text-slate-500">&bull; {formatDisplayDate(selectedBankTxn.value_date)}</span>
                     </div>
-                    <span className="text-sm font-mono font-bold text-blue-700 tabular-nums">
-                      {formatCurrencyAmount(
-                        selectedBankTxn.debit > 0 ? selectedBankTxn.debit : selectedBankTxn.credit,
-                        selectedBankTxn.currency
-                      )}
-                    </span>
+                    <div className="flex items-center space-x-3">
+                      <span className="text-sm font-mono font-bold text-blue-700 tabular-nums">
+                        {formatCurrencyAmount(
+                          selectedBankTxn.debit > 0 ? selectedBankTxn.debit : selectedBankTxn.credit,
+                          selectedBankTxn.currency
+                        )}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setBankBoardTxn(selectedBankTxn)}
+                        className="px-2.5 py-1 rounded-lg bg-white hover:bg-blue-50 border border-blue-200 text-blue-800 font-bold text-xs flex items-center space-x-1.5 transition cursor-pointer shadow-2xs"
+                        title="Open Bank Statement Board"
+                      >
+                        <Landmark className="w-3.5 h-3.5" />
+                        <span>Board</span>
+                      </button>
+                    </div>
                   </div>
 
                   <div className="text-xs">
@@ -929,6 +970,15 @@ export const MatchModule: React.FC = () => {
         <TransactionBoardModal
           transaction={boardTxn}
           onClose={() => setBoardTxn(null)}
+        />
+      )}
+
+      {/* 1-Click Bank Transaction Board Modal Launcher */}
+      {bankBoardTxn && (
+        <BankTransactionBoardModal
+          bankTransaction={bankBoardTxn}
+          onClose={() => setBankBoardTxn(null)}
+          onOpenUserBoard={(u) => setBoardTxn(u)}
         />
       )}
     </div>

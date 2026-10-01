@@ -18,8 +18,11 @@ import {
   Sparkles,
   Filter,
   Upload,
+  ExternalLink,
 } from 'lucide-react';
 import { UniversalImportModal } from './UniversalImportModal';
+import { BankTransactionBoardModal } from './BankTransactionBoardModal';
+import { BankTransaction } from '../../types/database';
 
 export const BankEntryModule: React.FC = () => {
   const {
@@ -85,6 +88,7 @@ export const BankEntryModule: React.FC = () => {
   const [balanceAfter, setBalanceAfter] = useState('');
   const [feedback, setFeedback] = useState<string | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [selectedBankTxnForBoard, setSelectedBankTxnForBoard] = useState<BankTransaction | null>(null);
 
   // --------------------------------------------------------------------------
   // LIVE PARTY NARRATION AUTO-DETECTION
@@ -635,12 +639,13 @@ export const BankEntryModule: React.FC = () => {
                   <th className="p-3 text-right">Debit (-)</th>
                   <th className="p-3 text-right">Credit (+)</th>
                   <th className="p-3 text-right">Balance</th>
+                  <th className="p-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
                 {filteredTransactions.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="p-6 text-center text-slate-400 font-sans">
+                    <td colSpan={9} className="p-6 text-center text-slate-400 font-sans">
                       No bank statement entries found.
                     </td>
                   </tr>
@@ -658,7 +663,16 @@ export const BankEntryModule: React.FC = () => {
                             className="rounded text-blue-700 focus:ring-blue-500 cursor-pointer"
                           />
                         </td>
-                        <td className="p-3 font-bold text-blue-900">{b.id}</td>
+                        <td className="p-3 font-bold text-blue-900">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedBankTxnForBoard(b)}
+                            className="hover:underline text-blue-900 font-bold cursor-pointer"
+                            title="Open Board"
+                          >
+                            {b.id}
+                          </button>
+                        </td>
                         <td className="p-3 text-slate-600 font-sans whitespace-nowrap">
                           {formatDisplayDate(b.value_date)}
                         </td>
@@ -689,6 +703,17 @@ export const BankEntryModule: React.FC = () => {
                         <td className="p-3 text-right font-bold text-slate-900 tabular-nums">
                           {b.balance_after ? b.balance_after.toFixed(2) : '—'}
                         </td>
+                        <td className="p-3 text-right whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedBankTxnForBoard(b)}
+                            className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 rounded-lg text-[11px] font-bold inline-flex items-center space-x-1 cursor-pointer transition shadow-2xs"
+                            title="Open Bank Statement Board & Version History"
+                          >
+                            <ExternalLink className="w-3 h-3 text-blue-600" />
+                            <span>Board</span>
+                          </button>
+                        </td>
                       </tr>
                     );
                   })
@@ -709,6 +734,14 @@ export const BankEntryModule: React.FC = () => {
             setFeedback(`Successfully imported ${count} bank statement transactions.`);
             setTimeout(() => setFeedback(null), 5000);
           }}
+        />
+      )}
+
+      {/* Bank Transaction Board Modal (Real-time Audit & Admin Restore) */}
+      {selectedBankTxnForBoard && (
+        <BankTransactionBoardModal
+          bankTransaction={selectedBankTxnForBoard}
+          onClose={() => setSelectedBankTxnForBoard(null)}
         />
       )}
     </div>

@@ -35,8 +35,7 @@ export type NavTab =
   | 'pending_queue'
   | 'statement_uploads'
   | 'statement_ledger'
-  | 'documents'
-  | 'versions';
+  | 'documents';
 
 interface SidebarProps {
   activeTab: NavTab;
@@ -131,7 +130,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { id: 'statement_uploads', label: 'Monthly Statement Grid', icon: CalendarCheck },
         { id: 'statement_ledger', label: 'Statement Running Ledger', icon: FileSpreadsheet },
         { id: 'documents', label: 'R2 Documents & Search', icon: FileText },
-        { id: 'versions', label: 'Cell Version History', icon: History },
       ],
     },
   ];

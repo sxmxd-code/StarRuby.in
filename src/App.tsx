@@ -15,7 +15,6 @@ import { PendingQueueModule } from './components/modules/PendingQueueModule';
 import { StatementUploadsModule } from './components/modules/StatementUploadsModule';
 import { StatementReconciliationModule } from './components/modules/StatementReconciliationModule';
 import { DocumentsModule } from './components/modules/DocumentsModule';
-import { VersionHistoryModule } from './components/modules/VersionHistoryModule';
 
 import { LoginPage } from './components/auth/LoginPage';
 import { useApp } from './context/AppContext';
@@ -33,7 +32,6 @@ const VALID_TABS: NavTab[] = [
   'statement_uploads',
   'statement_ledger',
   'documents',
-  'versions',
 ];
 
 const MainLayout: React.FC = () => {
@@ -122,7 +120,6 @@ const MainLayout: React.FC = () => {
             {activeTab === 'statement_uploads' && <StatementUploadsModule />}
             {activeTab === 'statement_ledger' && <StatementReconciliationModule />}
             {activeTab === 'documents' && <DocumentsModule />}
-            {activeTab === 'versions' && <VersionHistoryModule />}
           </div>
         </main>
       </div>
