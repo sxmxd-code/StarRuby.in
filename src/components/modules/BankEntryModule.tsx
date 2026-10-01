@@ -19,9 +19,13 @@ import {
   Filter,
   Upload,
   ExternalLink,
+  ChevronUp,
+  ChevronDown,
+  Plus,
 } from 'lucide-react';
 import { UniversalImportModal } from './UniversalImportModal';
 import { BankTransactionBoardModal } from './BankTransactionBoardModal';
+import { SearchablePartySelect } from '../common/SearchablePartySelect';
 import { BankTransaction } from '../../types/database';
 
 export const BankEntryModule: React.FC = () => {
@@ -89,6 +93,7 @@ export const BankEntryModule: React.FC = () => {
   const [feedback, setFeedback] = useState<string | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
   const [selectedBankTxnForBoard, setSelectedBankTxnForBoard] = useState<BankTransaction | null>(null);
+  const [isEntryPanelOpen, setIsEntryPanelOpen] = useState(true);
 
   // --------------------------------------------------------------------------
   // LIVE PARTY NARRATION AUTO-DETECTION
@@ -173,27 +178,56 @@ export const BankEntryModule: React.FC = () => {
   };
 
   // --------------------------------------------------------------------------
-  // TABLE SEARCH & BULK SELECTION
+  // TABLE FILTERS & SEARCH
   // --------------------------------------------------------------------------
+  const [filterStartDate, setFilterStartDate] = useState('');
+  const [filterEndDate, setFilterEndDate] = useState('');
+  const [filterPartyId, setFilterPartyId] = useState<string>('ALL');
+  const [filterDirection, setFilterDirection] = useState<'ALL' | 'Payment' | 'Receipt'>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTxnIds, setSelectedTxnIds] = useState<Set<string>>(new Set());
 
+  const resetFilters = () => {
+    setFilterStartDate('');
+    setFilterEndDate('');
+    setFilterPartyId('ALL');
+    setFilterDirection('ALL');
+    setSearchQuery('');
+  };
+
   const filteredTransactions = useMemo(() => {
     return scopedBankTransactions.filter(b => {
-      if (!searchQuery.trim()) return true;
-      const q = searchQuery.toLowerCase();
-      const inId = b.id.toLowerCase().includes(q);
-      const inNarration = b.narration.toLowerCase().includes(q);
-      const inRef = b.reference_no?.toLowerCase().includes(q);
-      const inDesc = b.description?.toLowerCase().includes(q);
-      const party = b.party_id ? parties.find(p => p.id === b.party_id) : undefined;
-      const inParty = Boolean(
-        (party?.system_name && party.system_name.toLowerCase().includes(q)) ||
-        (party?.id && party.id.toLowerCase().includes(q))
-      );
-      return inId || inNarration || inRef || inDesc || inParty;
+      // Date filters
+      if (filterStartDate && b.value_date < filterStartDate) return false;
+      if (filterEndDate && b.value_date > filterEndDate) return false;
+
+      // Direction filter
+      if (filterDirection === 'Payment' && !(b.debit > 0)) return false;
+      if (filterDirection === 'Receipt' && !(b.credit > 0)) return false;
+
+      // Party filter
+      if (filterPartyId && filterPartyId !== 'ALL') {
+        if (b.party_id !== filterPartyId) return false;
+      }
+
+      // Search query filter
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const inId = b.id.toLowerCase().includes(q);
+        const inNarration = b.narration.toLowerCase().includes(q);
+        const inRef = b.reference_no?.toLowerCase().includes(q);
+        const inDesc = b.description?.toLowerCase().includes(q);
+        const party = b.party_id ? parties.find(p => p.id === b.party_id) : undefined;
+        const inParty = Boolean(
+          (party?.system_name && party.system_name.toLowerCase().includes(q)) ||
+          (party?.id && party.id.toLowerCase().includes(q))
+        );
+        if (!inId && !inNarration && !inRef && !inDesc && !inParty) return false;
+      }
+
+      return true;
     });
-  }, [scopedBankTransactions, searchQuery, parties]);
+  }, [scopedBankTransactions, filterStartDate, filterEndDate, filterDirection, filterPartyId, searchQuery, parties]);
 
   const handleToggleSelectAll = () => {
     if (selectedTxnIds.size === filteredTransactions.length && filteredTransactions.length > 0) {
@@ -238,14 +272,35 @@ export const BankEntryModule: React.FC = () => {
           </div>
         </div>
 
-        <button
-          onClick={() => setShowImportModal(true)}
-          className="flex items-center space-x-2 px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0"
-          title="Bulk import bank statement lines from CSV, Google Sheets, or PDF"
-        >
-          <Upload className="w-4 h-4" />
-          <span>Bulk Import (CSV / Sheets / PDF)</span>
-        </button>
+        <div className="flex items-center space-x-2.5 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setIsEntryPanelOpen(prev => !prev)}
+            className="flex items-center space-x-2 px-3.5 py-2 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer"
+            title={isEntryPanelOpen ? "Collapse entry form to view statement lines" : "Expand entry form to record statement line"}
+          >
+            {isEntryPanelOpen ? (
+              <>
+                <ChevronUp className="w-3.5 h-3.5 text-slate-500" />
+                <span>Collapse Entry Form &amp; Scanner</span>
+              </>
+            ) : (
+              <>
+                <ChevronDown className="w-3.5 h-3.5 text-blue-700" />
+                <span className="text-blue-900">Record Statement Line</span>
+              </>
+            )}
+          </button>
+
+          <button
+            onClick={() => setShowImportModal(true)}
+            className="flex items-center space-x-2 px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0"
+            title="Bulk import bank statement lines from CSV, Google Sheets, or PDF"
+          >
+            <Upload className="w-4 h-4" />
+            <span>Bulk Import (CSV / Sheets / PDF)</span>
+          </button>
+        </div>
       </div>
 
       {feedback && (
@@ -258,10 +313,32 @@ export const BankEntryModule: React.FC = () => {
         </div>
       )}
 
+      {/* Collapsed State Quick Action Banner */}
+      {!isEntryPanelOpen && (
+        <div className="p-3.5 bg-gradient-to-r from-blue-50/70 via-white to-slate-50 border border-blue-200/80 rounded-xl flex items-center justify-between text-xs shadow-2xs">
+          <div className="flex items-center space-x-2.5 text-blue-950">
+            <Landmark className="w-4 h-4 text-blue-700 shrink-0" />
+            <div>
+              <span className="font-bold">Record Bank Statement Form &amp; Duplicate Scanner are Collapsed</span>
+              <p className="text-[11px] text-slate-500">Full screen allocated to statement lines table below.</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsEntryPanelOpen(true)}
+            className="px-3.5 py-1.5 bg-blue-700 hover:bg-blue-800 text-white font-bold rounded-lg transition text-xs shadow-xs cursor-pointer flex items-center space-x-1.5 shrink-0"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Open Entry Form</span>
+          </button>
+        </div>
+      )}
+
       {/* ==================================================================== */}
       {/* TOP: MAIN ENTRY FORM (7 COLS) + LIVE DUPLICATE SCANNER (5 COLS)      */}
       {/* ==================================================================== */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      {isEntryPanelOpen && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Form (7 Cols) */}
         <div className="lg:col-span-7 bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
           <h2 className="text-xs font-bold uppercase tracking-wider text-blue-900 border-b pb-2 flex items-center justify-between">
@@ -562,34 +639,109 @@ export const BankEntryModule: React.FC = () => {
           )}
         </div>
       </div>
+      )}
 
       {/* ==================================================================== */}
       {/* BOTTOM: STATEMENT LINES RECORDS TABLE (FULL WIDTH 12 COLS)           */}
       {/* ==================================================================== */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col space-y-4">
-          {/* Table Header and Search */}
-          <div className="p-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center space-x-2">
-                <span>Statement Lines ({filteredTransactions.length})</span>
-                {scopedBankTransactions.length !== filteredTransactions.length && (
-                  <span className="text-[11px] text-slate-400 font-normal">
-                    (filtered from {scopedBankTransactions.length})
+          {/* Table Header and Interactive Filter Bar */}
+          <div className="p-4 border-b border-slate-200 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 flex items-center space-x-2">
+                  <span>Supporting Bank Statement Lines</span>
+                  <span className="text-xs font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-lg border">
+                    {filteredTransactions.length} of {scopedBankTransactions.length} entries
                   </span>
-                )}
-              </h3>
-              <span className="text-[11px] text-slate-500">Supporting bank statement records</span>
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Verbatim bank statement feed with instant search and multi-column filtering.
+                </p>
+              </div>
+
+              {/* Text Search */}
+              <div className="relative w-full sm:w-72">
+                <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  placeholder="Search narration, UTR, ref, ID..."
+                  className="w-full pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
+              </div>
             </div>
 
-            <div className="relative w-full sm:w-64">
-              <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                placeholder="Search narration, ref, ID..."
-                className="w-full pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              />
+            {/* Comprehensive Filter Bar (Matching User Transactions Module) */}
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end text-xs">
+              {/* Start Date */}
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                  From Date
+                </label>
+                <input
+                  type="date"
+                  value={filterStartDate}
+                  onChange={e => setFilterStartDate(e.target.value)}
+                  className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-900"
+                />
+              </div>
+
+              {/* End Date */}
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                  To Date
+                </label>
+                <input
+                  type="date"
+                  value={filterEndDate}
+                  onChange={e => setFilterEndDate(e.target.value)}
+                  className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-900"
+                />
+              </div>
+
+              {/* Party Filter (Searchable Combobox) */}
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                  Matched Party
+                </label>
+                <SearchablePartySelect
+                  parties={parties}
+                  selectedPartyId={filterPartyId}
+                  onSelect={setFilterPartyId}
+                  allLabel="All Parties"
+                  placeholder="Search party by name or ID..."
+                />
+              </div>
+
+              {/* Direction Filter */}
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                  Direction
+                </label>
+                <select
+                  value={filterDirection}
+                  onChange={e => setFilterDirection(e.target.value as any)}
+                  className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 cursor-pointer"
+                >
+                  <option value="ALL">All Statement Lines</option>
+                  <option value="Payment">Debits Only (Payments -)</option>
+                  <option value="Receipt">Credits Only (Receipts +)</option>
+                </select>
+              </div>
+
+              {/* Reset Filters */}
+              <div>
+                <button
+                  type="button"
+                  onClick={resetFilters}
+                  className="w-full py-1.5 px-3 bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold rounded-lg text-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Reset Filters</span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -619,10 +771,10 @@ export const BankEntryModule: React.FC = () => {
             </div>
           )}
 
-          {/* Table Data */}
-          <div className="overflow-x-auto flex-1">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 text-slate-600 uppercase font-bold text-[10px] border-b">
+          {/* Table Data with Isolated Scroll Container & Sticky Header */}
+          <div className="overflow-x-auto max-h-[520px] overflow-y-auto overscroll-contain border-t border-slate-200 flex-1">
+            <table className="w-full text-left text-xs relative">
+              <thead className="bg-slate-100 text-slate-700 uppercase font-bold text-[10px] border-b border-slate-200 sticky top-0 z-10 shadow-2xs">
                 <tr>
                   <th className="p-3 w-8">
                     <input
