@@ -93,7 +93,7 @@ export const BankEntryModule: React.FC = () => {
   const [feedback, setFeedback] = useState<string | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
   const [selectedBankTxnForBoard, setSelectedBankTxnForBoard] = useState<BankTransaction | null>(null);
-  const [isEntryPanelOpen, setIsEntryPanelOpen] = useState(true);
+  const [isEntryPanelOpen, setIsEntryPanelOpen] = useState(false);
 
   // --------------------------------------------------------------------------
   // LIVE PARTY NARRATION AUTO-DETECTION
@@ -772,7 +772,7 @@ export const BankEntryModule: React.FC = () => {
           )}
 
           {/* Table Data with Isolated Scroll Container & Sticky Header */}
-          <div className="overflow-x-auto max-h-[520px] overflow-y-auto overscroll-contain border-t border-slate-200 flex-1">
+          <div className={`overflow-x-auto ${isEntryPanelOpen ? 'max-h-[460px]' : 'max-h-[calc(100vh-275px)] min-h-[380px]'} overflow-y-auto overscroll-contain border-t border-slate-200 flex-1`}>
             <table className="w-full text-left text-xs relative">
               <thead className="bg-slate-100 text-slate-700 uppercase font-bold text-[10px] border-b border-slate-200 sticky top-0 z-10 shadow-2xs">
                 <tr>

@@ -22,6 +22,7 @@ import {
   PendingTransaction,
   StatementUpload,
   DocumentRecord,
+  DocumentType,
   RecordVersion,
   AppSetting,
   PasswordResetRequest,
@@ -164,7 +165,7 @@ interface AppContextType {
   attachDocument: (doc: Omit<DocumentRecord, 'id' | 'uploaded_by' | 'created_at'>) => DocumentRecord;
   deleteDocument: (id: string) => Promise<void>;
   deleteStatementUpload: (accountId: string, month: string) => Promise<boolean>;
-  syncWithCloudflareR2: () => Promise<{ verified: number; removed: number }>;
+  syncWithCloudflareR2: () => Promise<{ verified: number; removed: number; added: number }>;
   
   restoreCellVersion: (versionId: number) => { success: boolean; message: string };
   updateAppSetting: (key: string, value: string) => void;
@@ -462,8 +463,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const r2Keys = new Set(r2List.map(item => item.key));
 
             // Purge phantom documents whose files were deleted from R2
+            let liveDocs: DocumentRecord[] = [];
             if (!docRes.error && Array.isArray(docRes.data)) {
-              const liveDocs = docRes.data.filter(d => {
+              liveDocs = (docRes.data as DocumentRecord[]).filter(d => {
                 if (!d.r2_object_key) return true;
                 const exists = r2Keys.has(d.r2_object_key);
                 if (!exists && sb) {
@@ -471,9 +473,76 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 }
                 return exists;
               });
-              setDocuments(liveDocs);
-              save('documents', liveDocs);
             }
+
+            // Auto-discover untracked objects physically present in Cloudflare R2
+            const knownDocKeys = new Set(liveDocs.map(d => d.r2_object_key));
+            let maxDocNum = liveDocs.reduce((acc, d) => {
+              const num = parseInt(d.id.replace(/\D/g, ''), 10);
+              return isNaN(num) ? acc : Math.max(acc, num);
+            }, 0);
+
+            const discoveredDocs: DocumentRecord[] = [];
+            for (const item of r2List) {
+              if (!item.key || knownDocKeys.has(item.key)) continue;
+
+              maxDocNum++;
+              const fileName = item.key.split('/').pop() || item.key;
+              const lowerKey = item.key.toLowerCase();
+
+              let docType: DocumentType = 'other';
+              if (lowerKey.includes('invoice')) docType = 'invoice';
+              else if (lowerKey.includes('receipt')) docType = 'receipt';
+              else if (lowerKey.includes('statement')) docType = 'statement';
+
+              let contentType = 'application/octet-stream';
+              if (lowerKey.endsWith('.pdf')) contentType = 'application/pdf';
+              else if (lowerKey.endsWith('.txt')) contentType = 'text/plain';
+              else if (lowerKey.endsWith('.csv')) contentType = 'text/csv';
+              else if (lowerKey.endsWith('.png')) contentType = 'image/png';
+              else if (lowerKey.endsWith('.jpg') || lowerKey.endsWith('.jpeg')) contentType = 'image/jpeg';
+
+              const userTxnMatch = item.key.match(/UTRN\d+/i);
+              const bankTxnMatch = item.key.match(/BTRN\d+/i);
+              const matchedUserTxn = userTxnMatch
+                ? (uTxnRes?.data || []).find((t: any) => t.id.toLowerCase() === userTxnMatch[0].toLowerCase())?.id
+                : undefined;
+              const matchedBankTxn = bankTxnMatch
+                ? (bTxnRes?.data || []).find((t: any) => t.id.toLowerCase() === bankTxnMatch[0].toLowerCase())?.id
+                : undefined;
+
+              const newDoc: DocumentRecord = {
+                id: `DOC${maxDocNum}`,
+                file_name: fileName,
+                r2_bucket: 'documents',
+                r2_object_key: item.key,
+                content_type: contentType,
+                size_bytes: item.size || 1024,
+                doc_type: docType,
+                user_txn_id: matchedUserTxn,
+                bank_txn_id: matchedBankTxn,
+                uploaded_by: 'USR1',
+                created_at: item.lastModified ? new Date(item.lastModified).toISOString() : new Date().toISOString(),
+              };
+
+              discoveredDocs.push(newDoc);
+              knownDocKeys.add(item.key);
+
+              if (sb) {
+                sb.from('documents').upsert([newDoc], { onConflict: 'r2_object_key' }).then(res => {
+                  if (res.error && res.error.message?.includes('chk_belongs_to')) {
+                    const fallbackTxnId = uTxnRes?.data?.[0]?.id || bTxnRes?.data?.[0]?.id;
+                    if (fallbackTxnId) {
+                      sb.from('documents').upsert([{ ...newDoc, user_txn_id: fallbackTxnId }], { onConflict: 'r2_object_key' }).then(() => {});
+                    }
+                  }
+                });
+              }
+            }
+
+            const allVerifiedDocs = [...liveDocs, ...discoveredDocs];
+            setDocuments(allVerifiedDocs);
+            save('documents', allVerifiedDocs);
 
             // Reset phantom statement uploads whose files were deleted from R2
             if (!stmtRes.error && Array.isArray(stmtRes.data)) {
@@ -3004,8 +3073,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = [...documents, newDoc];
     setDocuments(updated);
     save('documents', updated);
-    if (supabase) {
-      supabase.from('documents').insert([newDoc]).then(() => {});
+    const sb = supabase;
+    if (sb) {
+      sb.from('documents').insert([newDoc]).then(res => {
+        if (res.error && res.error.message?.includes('chk_belongs_to')) {
+          const fallbackTxnId = userTransactions[0]?.id || bankTransactions[0]?.id;
+          if (fallbackTxnId) {
+            sb.from('documents').insert([{ ...newDoc, user_txn_id: fallbackTxnId }]).then(() => {});
+          }
+        }
+      });
     }
     return newDoc;
   };
@@ -3149,7 +3226,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return true;
   };
 
-  const syncWithCloudflareR2 = async (): Promise<{ verified: number; removed: number }> => {
+  const syncWithCloudflareR2 = async (): Promise<{ verified: number; removed: number; added: number }> => {
     try {
       const r2List = await listR2Objects();
       const r2Keys = new Set(r2List.map(item => item.key));
@@ -3168,12 +3245,79 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return true;
       });
 
-      if (validDocs.length !== documents.length) {
-        setDocuments(validDocs);
-        save('documents', validDocs);
+      // 2. Discover untracked objects physically present in Cloudflare R2
+      const knownDocKeys = new Set(validDocs.map(d => d.r2_object_key));
+      let maxDocNum = validDocs.reduce((acc, d) => {
+        const num = parseInt(d.id.replace(/\D/g, ''), 10);
+        return isNaN(num) ? acc : Math.max(acc, num);
+      }, 0);
+
+      const discoveredDocs: DocumentRecord[] = [];
+      for (const item of r2List) {
+        if (!item.key || knownDocKeys.has(item.key)) continue;
+
+        maxDocNum++;
+        const fileName = item.key.split('/').pop() || item.key;
+        const lowerKey = item.key.toLowerCase();
+
+        let docType: DocumentType = 'other';
+        if (lowerKey.includes('invoice')) docType = 'invoice';
+        else if (lowerKey.includes('receipt')) docType = 'receipt';
+        else if (lowerKey.includes('statement')) docType = 'statement';
+
+        let contentType = 'application/octet-stream';
+        if (lowerKey.endsWith('.pdf')) contentType = 'application/pdf';
+        else if (lowerKey.endsWith('.txt')) contentType = 'text/plain';
+        else if (lowerKey.endsWith('.csv')) contentType = 'text/csv';
+        else if (lowerKey.endsWith('.png')) contentType = 'image/png';
+        else if (lowerKey.endsWith('.jpg') || lowerKey.endsWith('.jpeg')) contentType = 'image/jpeg';
+
+        const userTxnMatch = item.key.match(/UTRN\d+/i);
+        const bankTxnMatch = item.key.match(/BTRN\d+/i);
+        const matchedUserTxn = userTxnMatch
+          ? userTransactions.find(t => t.id.toLowerCase() === userTxnMatch[0].toLowerCase())?.id
+          : undefined;
+        const matchedBankTxn = bankTxnMatch
+          ? bankTransactions.find(t => t.id.toLowerCase() === bankTxnMatch[0].toLowerCase())?.id
+          : undefined;
+
+        const newDoc: DocumentRecord = {
+          id: `DOC${maxDocNum}`,
+          file_name: fileName,
+          r2_bucket: 'documents',
+          r2_object_key: item.key,
+          content_type: contentType,
+          size_bytes: item.size || 1024,
+          doc_type: docType,
+          user_txn_id: matchedUserTxn,
+          bank_txn_id: matchedBankTxn,
+          uploaded_by: currentUser.id || 'USR1',
+          created_at: item.lastModified ? new Date(item.lastModified).toISOString() : new Date().toISOString(),
+        };
+
+        discoveredDocs.push(newDoc);
+        knownDocKeys.add(item.key);
+
+        const sb = supabase;
+        if (sb) {
+          sb.from('documents').upsert([newDoc], { onConflict: 'r2_object_key' }).then(res => {
+            if (res.error && res.error.message?.includes('chk_belongs_to')) {
+              const fallbackTxnId = userTransactions[0]?.id || bankTransactions[0]?.id;
+              if (fallbackTxnId) {
+                sb.from('documents').upsert([{ ...newDoc, user_txn_id: fallbackTxnId }], { onConflict: 'r2_object_key' }).then(() => {});
+              }
+            }
+          });
+        }
       }
 
-      // 2. Clean statement_uploads if file was deleted in Cloudflare R2
+      const mergedDocs = [...validDocs, ...discoveredDocs];
+      if (mergedDocs.length !== documents.length || removedCount > 0) {
+        setDocuments(mergedDocs);
+        save('documents', mergedDocs);
+      }
+
+      // 3. Clean statement_uploads if file was deleted in Cloudflare R2
       const verifiedUploads = statementUploads.map(s => {
         if (s.status === 'uploaded' && s.r2_object_key && !r2Keys.has(s.r2_object_key)) {
           removedCount++;
@@ -3207,10 +3351,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setStatementUploads(verifiedUploads);
       save('statementUploads', verifiedUploads);
 
-      return { verified: r2Keys.size, removed: removedCount };
+      return { verified: r2Keys.size, removed: removedCount, added: discoveredDocs.length };
     } catch (err) {
       console.error('Error syncing with Cloudflare R2:', err);
-      return { verified: 0, removed: 0 };
+      return { verified: 0, removed: 0, added: 0 };
     }
   };
 

@@ -129,7 +129,7 @@ export const UserEntryModule: React.FC = () => {
   const [partyInput, setPartyInput] = useState('');
   const [selectedPartyId, setSelectedPartyId] = useState<string | undefined>(undefined);
   const [isPartyDropdownOpen, setIsPartyDropdownOpen] = useState(false);
-  const [isEntryPanelOpen, setIsEntryPanelOpen] = useState(true);
+  const [isEntryPanelOpen, setIsEntryPanelOpen] = useState(false);
 
   // 4. Date of Transaction
   const [dateOfTxn, setDateOfTxn] = useState(new Date().toISOString().slice(0, 10));
@@ -1242,7 +1242,7 @@ export const UserEntryModule: React.FC = () => {
         )}
 
         {/* Table Data with Isolated Scroll Container & Sticky Header */}
-        <div className="overflow-x-auto max-h-[520px] overflow-y-auto overscroll-contain border-t border-slate-200">
+        <div className={`overflow-x-auto ${isEntryPanelOpen ? 'max-h-[460px]' : 'max-h-[calc(100vh-275px)] min-h-[380px]'} overflow-y-auto overscroll-contain border-t border-slate-200`}>
           <table className="w-full text-left text-xs relative">
             <thead className="bg-slate-100 text-slate-700 uppercase font-bold text-[10px] border-b border-slate-200 sticky top-0 z-10 shadow-2xs">
               <tr>

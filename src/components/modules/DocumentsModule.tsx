@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useApp } from '../../context/AppContext';
-import { uploadToR2 } from '../../lib/storage';
+import { uploadToR2, getR2DownloadUrl } from '../../lib/storage';
 import { extractDocumentMetadataAI, ExtractedInvoiceData, isGeminiConfigured } from '../../lib/gemini';
 import { FileText, Search, Upload, Paperclip, Sparkles, ExternalLink, Trash2, Bot, Check, X, Loader2, RefreshCw } from 'lucide-react';
 import { DocumentRecord } from '../../types/database';
@@ -85,12 +85,34 @@ export const DocumentsModule: React.FC = () => {
     }
   };
 
+  const handleViewDocument = async (doc: DocumentRecord) => {
+    if (doc.download_url && doc.download_url !== '#') {
+      window.open(doc.download_url, '_blank');
+      return;
+    }
+    try {
+      const url = await getR2DownloadUrl(doc.r2_bucket, doc.r2_object_key);
+      if (url && url !== '#') {
+        window.open(url, '_blank');
+      } else {
+        alert('Unable to generate secure download URL for this file.');
+      }
+    } catch (e) {
+      console.error('Error fetching file URL:', e);
+      alert('Error fetching file URL from storage.');
+    }
+  };
+
   const handleSyncR2 = async () => {
     setIsSyncing(true);
     try {
       const res = await syncWithCloudflareR2();
-      setFeedback(`Cloudflare R2 Synced: ${res.verified} files active in storage. ${res.removed > 0 ? `${res.removed} missing/orphaned records removed.` : 'All documents verified in sync!'}`);
-      setTimeout(() => setFeedback(null), 5000);
+      const parts = [`Cloudflare R2 Synced: ${res.verified} files active in storage.`];
+      if (res.added && res.added > 0) parts.push(`${res.added} untracked files discovered & added.`);
+      if (res.removed > 0) parts.push(`${res.removed} missing/orphaned records removed.`);
+      if (!res.added && res.removed === 0) parts.push('All documents verified in sync!');
+      setFeedback(parts.join(' '));
+      setTimeout(() => setFeedback(null), 6000);
     } catch (err) {
       console.error('R2 Sync error:', err);
       alert('Failed to sync with Cloudflare R2.');
@@ -247,15 +269,14 @@ export const DocumentsModule: React.FC = () => {
 
               <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
                 <span className="text-[10px] text-slate-400">{new Date(doc.created_at).toLocaleDateString()}</span>
-                <a
-                  href={doc.download_url || '#'}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-rose-700 font-bold hover:underline flex items-center space-x-1"
+                <button
+                  type="button"
+                  onClick={() => handleViewDocument(doc)}
+                  className="text-rose-700 font-bold hover:underline flex items-center space-x-1 cursor-pointer"
                 >
                   <span>View File</span>
                   <ExternalLink className="w-3 h-3" />
-                </a>
+                </button>
               </div>
             </div>
           ))
