@@ -550,18 +550,22 @@ export const UserEntryModule: React.FC = () => {
           <button
             type="button"
             onClick={() => setIsEntryPanelOpen(prev => !prev)}
-            className="flex items-center space-x-2 px-3.5 py-2 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer"
-            title={isEntryPanelOpen ? "Collapse entry form to view transactions table" : "Expand entry form to record transaction"}
+            className={`flex items-center space-x-2 px-3.5 py-2 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer ${
+              isEntryPanelOpen
+                ? 'bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 shadow-2xs'
+                : 'bg-rose-700 hover:bg-rose-800 text-white'
+            }`}
+            title={isEntryPanelOpen ? "Collapse entry form" : "Open entry form to record transaction"}
           >
             {isEntryPanelOpen ? (
               <>
                 <ChevronUp className="w-3.5 h-3.5 text-slate-500" />
-                <span>Collapse Entry Form &amp; Scanner</span>
+                <span>Collapse Entry Form</span>
               </>
             ) : (
               <>
-                <ChevronDown className="w-3.5 h-3.5 text-rose-700" />
-                <span className="text-rose-900">Record New Transaction</span>
+                <Plus className="w-3.5 h-3.5 text-white" />
+                <span>Record User Transaction</span>
               </>
             )}
           </button>
@@ -585,27 +589,6 @@ export const UserEntryModule: React.FC = () => {
           <span>{formFeedback}</span>
         </div>
       ) : null}
-
-      {/* Collapsed State Quick Action Banner */}
-      {!isEntryPanelOpen && (
-        <div className="p-3.5 bg-gradient-to-r from-rose-50/70 via-white to-slate-50 border border-rose-200/80 rounded-xl flex items-center justify-between text-xs shadow-2xs">
-          <div className="flex items-center space-x-2.5 text-rose-950">
-            <CreditCard className="w-4 h-4 text-rose-700 shrink-0" />
-            <div>
-              <span className="font-bold">Record Transaction Form &amp; Duplicate Scanner are Collapsed</span>
-              <p className="text-[11px] text-slate-500">Full screen allocated to transactions table below. Next ID: <strong className="text-rose-700 font-mono">{nextTxnId}</strong></p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => setIsEntryPanelOpen(true)}
-            className="px-3.5 py-1.5 bg-rose-700 hover:bg-rose-800 text-white font-bold rounded-lg transition text-xs shadow-xs cursor-pointer flex items-center space-x-1.5 shrink-0"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Open Entry Form</span>
-          </button>
-        </div>
-      )}
 
       {/* ==================================================================== */}
       {/* MAIN ENTRY FORM (LEFT) + LIVE DUPLICATE SCANNER (RIGHT)               */}
