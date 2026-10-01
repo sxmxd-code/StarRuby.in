@@ -933,11 +933,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Operational Action 1: Add User Transaction
   const addUserTransaction = (data: Omit<UserTransaction, 'id' | 'date_of_entry' | 'status' | 'created_by' | 'created_at' | 'updated_at'>): UserTransaction => {
-    // Collision-free ID generation: max(existing) + 1
-    const maxNum = userTransactions.reduce((acc, t) => {
+    // Collision-free ID generation: max(existing transactions + record versions + comments) + 1
+    const maxTxn = userTransactions.reduce((acc, t) => {
       const num = parseInt(t.id.replace(/\D/g, ''), 10);
       return isNaN(num) ? acc : Math.max(acc, num);
     }, 100);
+
+    const maxVersion = recordVersions.reduce((acc, v) => {
+      if (v.table_name === 'transactions_user') {
+        const num = parseInt(v.record_id.replace(/\D/g, ''), 10);
+        return isNaN(num) ? acc : Math.max(acc, num);
+      }
+      return acc;
+    }, 100);
+
+    const maxComment = comments.reduce((acc, c) => {
+      const num = parseInt(c.user_txn_id.replace(/\D/g, ''), 10);
+      return isNaN(num) ? acc : Math.max(acc, num);
+    }, 100);
+
+    const maxNum = Math.max(maxTxn, maxVersion, maxComment);
     const newId = `UTRN${maxNum + 1}`;
     const now = new Date().toISOString();
 
@@ -1029,10 +1044,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ): UserTransaction[] => {
     if (txnsData.length === 0) return [];
 
-    let currentMax = userTransactions.reduce((acc, t) => {
+    const maxTxn = userTransactions.reduce((acc, t) => {
       const num = parseInt(t.id.replace(/\D/g, ''), 10);
       return isNaN(num) ? acc : Math.max(acc, num);
     }, 100);
+
+    const maxVersion = recordVersions.reduce((acc, v) => {
+      if (v.table_name === 'transactions_user') {
+        const num = parseInt(v.record_id.replace(/\D/g, ''), 10);
+        return isNaN(num) ? acc : Math.max(acc, num);
+      }
+      return acc;
+    }, 100);
+
+    const maxComment = comments.reduce((acc, c) => {
+      const num = parseInt(c.user_txn_id.replace(/\D/g, ''), 10);
+      return isNaN(num) ? acc : Math.max(acc, num);
+    }, 100);
+
+    let currentMax = Math.max(maxTxn, maxVersion, maxComment);
 
     const now = new Date().toISOString();
     const today = now.slice(0, 10);
@@ -1083,22 +1113,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const existing = userTransactions.find(t => t.id === id);
     if (!existing) return false;
 
-    // Log deletion into record versions
-    const maxVerId = recordVersions.reduce((acc, v) => Math.max(acc, v.id), 1000);
-    const versionDelta: RecordVersion = {
-      id: maxVerId + 1,
-      table_name: 'transactions_user',
-      record_id: id,
-      column_name: 'STATUS_DELETED',
-      old_value: existing.status,
-      new_value: `DELETED: ${reason}`,
-      version_no: 1,
-      changed_by: currentUser.id,
-      changed_at: new Date().toISOString(),
-    };
-    const updatedVersions = [versionDelta, ...recordVersions];
+    // Purge versions and comments for this deleted transaction so old history doesn't collide
+    const updatedVersions = recordVersions.filter(v => !(v.table_name === 'transactions_user' && v.record_id === id));
     setRecordVersions(updatedVersions);
     save('recordVersions', updatedVersions);
+
+    const updatedComments = comments.filter(c => c.user_txn_id !== id);
+    setComments(updatedComments);
+    save('comments', updatedComments);
 
     const updatedTxns = userTransactions.filter(t => t.id !== id);
     setUserTransactions(updatedTxns);
@@ -1106,7 +1128,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (supabase) {
       supabase.from('transactions_user').delete().eq('id', id).then(() => {});
-      supabase.from('record_versions').insert([versionDelta]).then(() => {});
+      supabase.from('record_versions').delete().eq('table_name', 'transactions_user').eq('record_id', id).then(() => {});
+      supabase.from('comments').delete().eq('user_txn_id', id).then(() => {});
     }
 
     return true;
@@ -1118,10 +1141,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = userTransactions.filter(t => !toDeleteSet.has(t.id));
     setUserTransactions(updated);
     save('userTransactions', updated);
+
+    const updatedVersions = recordVersions.filter(v => !(v.table_name === 'transactions_user' && toDeleteSet.has(v.record_id)));
+    setRecordVersions(updatedVersions);
+    save('recordVersions', updatedVersions);
+
+    const updatedComments = comments.filter(c => !toDeleteSet.has(c.user_txn_id));
+    setComments(updatedComments);
+    save('comments', updatedComments);
+
     if (supabase) {
       supabase.from('transactions_user').delete().in('id', txnIds).then(({ error }) => {
         if (error) console.warn('Supabase batch delete user transactions notice:', error.message);
       });
+      supabase.from('record_versions').delete().eq('table_name', 'transactions_user').in('record_id', txnIds).then(() => {});
+      supabase.from('comments').delete().in('user_txn_id', txnIds).then(() => {});
     }
   };
 
@@ -1179,10 +1213,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Operational Action 4: Bank Statement Transaction Entry
   const addBankTransaction = (data: Omit<BankTransaction, 'id' | 'created_by' | 'created_at' | 'updated_at'>): BankTransaction => {
-    const maxNum = bankTransactions.reduce((acc, t) => {
+    const maxTxn = bankTransactions.reduce((acc, t) => {
       const num = parseInt(t.id.replace(/\D/g, ''), 10);
       return isNaN(num) ? acc : Math.max(acc, num);
     }, 100);
+
+    const maxVersion = recordVersions.reduce((acc, v) => {
+      if (v.table_name === 'transactions_bank') {
+        const num = parseInt(v.record_id.replace(/\D/g, ''), 10);
+        return isNaN(num) ? acc : Math.max(acc, num);
+      }
+      return acc;
+    }, 100);
+
+    const maxNum = Math.max(maxTxn, maxVersion);
     const newId = `BTRN${maxNum + 1}`;
     const now = new Date().toISOString();
 
@@ -1243,10 +1287,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addBankTransactionsBatch = (
     txnsData: Array<Omit<BankTransaction, 'id' | 'created_by' | 'created_at' | 'updated_at'>>
   ): BankTransaction[] => {
-    let currentMax = bankTransactions.reduce((acc, t) => {
+    const maxTxn = bankTransactions.reduce((acc, t) => {
       const num = parseInt(t.id.replace(/\D/g, ''), 10);
       return isNaN(num) ? acc : Math.max(acc, num);
     }, 100);
+
+    const maxVersion = recordVersions.reduce((acc, v) => {
+      if (v.table_name === 'transactions_bank') {
+        const num = parseInt(v.record_id.replace(/\D/g, ''), 10);
+        return isNaN(num) ? acc : Math.max(acc, num);
+      }
+      return acc;
+    }, 100);
+
+    let currentMax = Math.max(maxTxn, maxVersion);
 
     const now = new Date().toISOString();
     const newTxns: BankTransaction[] = [];
@@ -1338,23 +1392,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const deleteBankTransaction = (id: string, reason: string): boolean => {
+  const deleteBankTransaction = (id: string, _reason: string): boolean => {
     const existing = bankTransactions.find(t => t.id === id);
     if (!existing) return false;
 
-    const maxVerId = recordVersions.reduce((acc, v) => Math.max(acc, v.id), 1000);
-    const versionDelta: RecordVersion = {
-      id: maxVerId + 1,
-      table_name: 'transactions_bank',
-      record_id: id,
-      column_name: 'STATUS_DELETED',
-      old_value: 'active',
-      new_value: `DELETED: ${reason}`,
-      version_no: 1,
-      changed_by: currentUser.id,
-      changed_at: new Date().toISOString(),
-    };
-    const updatedVersions = [versionDelta, ...recordVersions];
+    // Purge versions for this deleted bank transaction so old history doesn't collide
+    const updatedVersions = recordVersions.filter(v => !(v.table_name === 'transactions_bank' && v.record_id === id));
     setRecordVersions(updatedVersions);
     save('recordVersions', updatedVersions);
 
@@ -1364,7 +1407,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (supabase) {
       supabase.from('transactions_bank').delete().eq('id', id).then(() => {});
-      supabase.from('record_versions').insert([versionDelta]).then(() => {});
+      supabase.from('record_versions').delete().eq('table_name', 'transactions_bank').eq('record_id', id).then(() => {});
     }
 
     return true;
@@ -1376,10 +1419,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = bankTransactions.filter(t => !toDeleteSet.has(t.id));
     setBankTransactions(updated);
     save('bankTransactions', updated);
+
+    const updatedVersions = recordVersions.filter(v => !(v.table_name === 'transactions_bank' && toDeleteSet.has(v.record_id)));
+    setRecordVersions(updatedVersions);
+    save('recordVersions', updatedVersions);
+
     if (supabase) {
       supabase.from('transactions_bank').delete().in('id', txnIds).then(({ error }) => {
         if (error) console.warn('Supabase batch delete bank transactions notice:', error.message);
       });
+      supabase.from('record_versions').delete().eq('table_name', 'transactions_bank').in('record_id', txnIds).then(() => {});
     }
   };
 
