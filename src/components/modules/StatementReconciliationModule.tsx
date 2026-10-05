@@ -21,6 +21,8 @@ export const StatementReconciliationModule: React.FC = () => {
     approvals,
     partiesMap,
     allUsers,
+    hasHarshilApproved,
+    hasVismayApproved,
   } = useApp();
 
   const [selectedAccountId, setSelectedAccountId] = useState(scopedAccounts[0]?.id || '');
@@ -67,8 +69,8 @@ export const StatementReconciliationModule: React.FC = () => {
       }
 
       let l1Status = 'No';
-      let l2Status = 'No';
-      let l3Status = 'No';
+      let harshilStatus = 'No';
+      let vismayStatus = 'No';
       let adminStatus = 'Unlinked';
       let approvedBy = '—';
 
@@ -76,19 +78,19 @@ export const StatementReconciliationModule: React.FC = () => {
         adminStatus = primaryLinkedTxn.status;
         const txnApprs = approvals.filter(a => a.user_txn_id === primaryLinkedTxn.id && a.decision === 'approved');
         const l1 = txnApprs.find(a => a.layer === 1);
-        const l2 = txnApprs.find(a => a.layer === 2);
-        const l3 = txnApprs.find(a => a.layer === 3);
 
         if (l1) l1Status = 'Yes';
-        if (l2) l2Status = 'Yes';
-        if (l3) l3Status = 'Yes';
+        if (hasHarshilApproved(primaryLinkedTxn.id)) harshilStatus = 'Yes';
+        if (hasVismayApproved(primaryLinkedTxn.id)) vismayStatus = 'Yes';
 
-        if (l3) {
-          const uObj = allUsers.find(usr => usr.id === l3.approver_id);
-          approvedBy = uObj ? uObj.full_name : l3.approver_id;
-        } else if (l2) {
-          const uObj = allUsers.find(usr => usr.id === l2.approver_id);
-          approvedBy = uObj ? `${uObj.full_name} (L2)` : `${l2.approver_id} (L2)`;
+        if (harshilStatus === 'Yes' && vismayStatus === 'Yes') {
+          approvedBy = 'Both (Harshil & Vismay)';
+        } else if (harshilStatus === 'Yes') {
+          approvedBy = 'Harshil Zaveri';
+        } else if (vismayStatus === 'Yes') {
+          approvedBy = 'Vismay Zaveri';
+        } else if (l1) {
+          approvedBy = 'Layer 1 (Accountant)';
         }
       }
 
@@ -98,15 +100,15 @@ export const StatementReconciliationModule: React.FC = () => {
         primaryLinkedTxn,
         linkedCount: linkedUserTxns.length,
         l1Status,
-        l2Status,
-        l3Status,
+        harshilStatus,
+        vismayStatus,
         adminStatus,
         approvedBy,
       });
     }
 
     return rows;
-  }, [bankAccountEntries, txnBankLinks, userTransactions, approvals, allUsers]);
+  }, [bankAccountEntries, txnBankLinks, userTransactions, approvals, allUsers, hasHarshilApproved, hasVismayApproved]);
 
   // =========================================================================
   // 2. USER TRANSACTIONS RUNNING BOOK LEDGER (Company Cash / Bank Book)
@@ -133,20 +135,20 @@ export const StatementReconciliationModule: React.FC = () => {
 
       const txnApprs = approvals.filter(a => a.user_txn_id === txn.id && a.decision === 'approved');
       const l1 = txnApprs.find(a => a.layer === 1);
-      const l2 = txnApprs.find(a => a.layer === 2);
-      const l3 = txnApprs.find(a => a.layer === 3);
 
       const l1Status = l1 ? 'Yes' : 'No';
-      const l2Status = l2 ? 'Yes' : 'No';
-      const l3Status = l3 ? 'Yes' : 'No';
+      const harshilStatus = hasHarshilApproved(txn.id) ? 'Yes' : 'No';
+      const vismayStatus = hasVismayApproved(txn.id) ? 'Yes' : 'No';
 
       let approvedBy = '—';
-      if (l3) {
-        const uObj = allUsers.find(usr => usr.id === l3.approver_id);
-        approvedBy = uObj ? uObj.full_name : l3.approver_id;
-      } else if (l2) {
-        const uObj = allUsers.find(usr => usr.id === l2.approver_id);
-        approvedBy = uObj ? `${uObj.full_name} (L2)` : `${l2.approver_id} (L2)`;
+      if (harshilStatus === 'Yes' && vismayStatus === 'Yes') {
+        approvedBy = 'Both (Harshil & Vismay)';
+      } else if (harshilStatus === 'Yes') {
+        approvedBy = 'Harshil Zaveri';
+      } else if (vismayStatus === 'Yes') {
+        approvedBy = 'Vismay Zaveri';
+      } else if (l1) {
+        approvedBy = 'Layer 1 (Accountant)';
       }
 
       return {
@@ -156,13 +158,13 @@ export const StatementReconciliationModule: React.FC = () => {
         computedBalance: running,
         linkedBankEntries,
         l1Status,
-        l2Status,
-        l3Status,
+        harshilStatus,
+        vismayStatus,
         adminStatus: txn.status,
         approvedBy,
       };
     });
-  }, [userAccountEntries, txnBankLinks, bankTransactions, approvals, allUsers]);
+  }, [userAccountEntries, txnBankLinks, bankTransactions, approvals, allUsers, hasHarshilApproved, hasVismayApproved]);
 
   // Closing balances
   const closingStatementBalance = bankLedgerRows.length > 0 ? bankLedgerRows[bankLedgerRows.length - 1].computedBalance : 0;
@@ -317,8 +319,8 @@ export const StatementReconciliationModule: React.FC = () => {
                   <th className="p-3 text-right">Statement Balance</th>
                   <th className="p-3 font-sans">Linked User Txn</th>
                   <th className="p-3 text-center font-sans">Layer 1</th>
-                  <th className="p-3 text-center font-sans">Layer 2</th>
-                  <th className="p-3 text-center font-sans">Layer 3</th>
+                  <th className="p-3 text-center font-sans">Harshil Appr.</th>
+                  <th className="p-3 text-center font-sans">Vismay Appr.</th>
                   <th className="p-3 text-center font-sans">Admin Status</th>
                   <th className="p-3 font-sans">Approved By</th>
                 </tr>
@@ -383,21 +385,21 @@ export const StatementReconciliationModule: React.FC = () => {
                           </span>
                         </td>
 
-                        {/* Layer 2 (Admin 1 Approval) */}
+                        {/* Harshil Appr. */}
                         <td className="p-3 text-center font-sans">
                           <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                            row.l2Status === 'Yes' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'
+                            row.harshilStatus === 'Yes' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'
                           }`}>
-                            {row.l2Status}
+                            {row.harshilStatus}
                           </span>
                         </td>
 
-                        {/* Layer 3 (Admin 2 Final Review) */}
+                        {/* Vismay Appr. */}
                         <td className="p-3 text-center font-sans">
                           <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                            row.l3Status === 'Yes' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'
+                            row.vismayStatus === 'Yes' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'
                           }`}>
-                            {row.l3Status}
+                            {row.vismayStatus}
                           </span>
                         </td>
 
@@ -456,8 +458,8 @@ export const StatementReconciliationModule: React.FC = () => {
                   <th className="p-3 text-right">Book Balance</th>
                   <th className="p-3 font-sans">Linked Bank Statement</th>
                   <th className="p-3 text-center font-sans">Layer 1</th>
-                  <th className="p-3 text-center font-sans">Layer 2</th>
-                  <th className="p-3 text-center font-sans">Layer 3</th>
+                  <th className="p-3 text-center font-sans">Harshil Appr.</th>
+                  <th className="p-3 text-center font-sans">Vismay Appr.</th>
                   <th className="p-3 text-center font-sans">Admin Status</th>
                   <th className="p-3 font-sans">Approved By</th>
                 </tr>
@@ -543,21 +545,21 @@ export const StatementReconciliationModule: React.FC = () => {
                           </span>
                         </td>
 
-                        {/* Layer 2 (Admin 1 Approval) */}
+                        {/* Harshil Appr. */}
                         <td className="p-3 text-center font-sans">
                           <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                            row.l2Status === 'Yes' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'
+                            row.harshilStatus === 'Yes' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'
                           }`}>
-                            {row.l2Status}
+                            {row.harshilStatus}
                           </span>
                         </td>
 
-                        {/* Layer 3 (Admin 2 Final Review) */}
+                        {/* Vismay Appr. */}
                         <td className="p-3 text-center font-sans">
                           <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                            row.l3Status === 'Yes' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'
+                            row.vismayStatus === 'Yes' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'
                           }`}>
-                            {row.l3Status}
+                            {row.vismayStatus}
                           </span>
                         </td>
 

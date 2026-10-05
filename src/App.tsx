@@ -10,7 +10,6 @@ import { BankEntryModule } from './components/modules/BankEntryModule';
 import { DuplicatesModule } from './components/modules/DuplicatesModule';
 import { PartyAliasesModule } from './components/modules/PartyAliasesModule';
 import { MatchModule } from './components/modules/MatchModule';
-import { ApprovalsModule } from './components/modules/ApprovalsModule';
 import { PendingQueueModule } from './components/modules/PendingQueueModule';
 import { StatementUploadsModule } from './components/modules/StatementUploadsModule';
 import { StatementReconciliationModule } from './components/modules/StatementReconciliationModule';
@@ -114,8 +113,7 @@ const MainLayout: React.FC = () => {
             {activeTab === 'bank_entry' && <BankEntryModule />}
             {activeTab === 'duplicates' && <DuplicatesModule />}
             {activeTab === 'aliases' && <PartyAliasesModule />}
-            {activeTab === 'match' && <MatchModule />}
-            {activeTab === 'approvals' && <ApprovalsModule />}
+            {(activeTab === 'match' || activeTab === 'approvals') && <MatchModule />}
             {activeTab === 'pending_queue' && <PendingQueueModule />}
             {activeTab === 'statement_uploads' && <StatementUploadsModule />}
             {activeTab === 'statement_ledger' && <StatementReconciliationModule />}

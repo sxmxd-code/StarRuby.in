@@ -137,6 +137,12 @@ interface AppContextType {
   markTransactionAsQueried: (userTxnId: string, queryReason: string) => void;
   submitApproval: (userTxnId: string, layer: 1 | 2 | 3, decision: 'approved' | 'rejected', comment?: string) => { success: boolean; message: string };
   undoLayer2Approval: (userTxnId: string) => { success: boolean; message: string };
+  isHarshilUser: (userId?: string) => boolean;
+  isVismayUser: (userId?: string) => boolean;
+  hasHarshilApproved: (userTxnId: string) => boolean;
+  hasVismayApproved: (userTxnId: string) => boolean;
+  submitAdminApproval: (userTxnId: string, comment?: string) => { success: boolean; message: string };
+  undoAdminApproval: (userTxnId: string) => { success: boolean; message: string };
   
   // Duplicates Triage Persistence
   dismissedDuplicatePairs: Set<string>;
@@ -2293,37 +2299,140 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: false, message: 'Invalid approval layer specified.' };
   };
 
-  // Operational Action 7a: Undo Layer 2 Approval (Admin Exclusivity & Correction)
-  const undoLayer2Approval = (userTxnId: string): { success: boolean; message: string } => {
+  // =========================================================================
+  // DUAL-ADMIN CO-FOUNDER APPROVAL GOVERNANCE (HARSHIL & VISMAY)
+  // =========================================================================
+  const isHarshilUser = (userId?: string): boolean => {
+    if (!userId) return false;
+    if (userId === 'USR1') return true;
+    const u = users.find(usr => usr.id === userId);
+    return u ? (u.email.toLowerCase().includes('harshil') || u.full_name.toLowerCase().includes('harshil')) : false;
+  };
+
+  const isVismayUser = (userId?: string): boolean => {
+    if (!userId) return false;
+    if (userId === 'USR2') return true;
+    const u = users.find(usr => usr.id === userId);
+    return u ? (u.email.toLowerCase().includes('vismay') || u.full_name.toLowerCase().includes('vismay')) : false;
+  };
+
+  const hasHarshilApproved = (userTxnId: string): boolean => {
+    return approvals.some(a => a.user_txn_id === userTxnId && a.decision === 'approved' && isHarshilUser(a.approver_id));
+  };
+
+  const hasVismayApproved = (userTxnId: string): boolean => {
+    return approvals.some(a => a.user_txn_id === userTxnId && a.decision === 'approved' && isVismayUser(a.approver_id));
+  };
+
+  const submitAdminApproval = (userTxnId: string, comment?: string): { success: boolean; message: string } => {
     const txn = userTransactions.find(t => t.id === userTxnId);
     if (!txn) return { success: false, message: 'Transaction not found.' };
 
     if (currentRole !== 'Admin') {
-      return { success: false, message: 'Unauthorized: Only Administrators can undo Layer 2 approval.' };
+      return { success: false, message: 'Unauthorized: Only Group Admins (Harshil Zaveri & Vismay Zaveri) can approve transactions.' };
     }
 
-    const layer2 = approvals.find(a => a.user_txn_id === userTxnId && a.layer === 2 && a.decision === 'approved');
-    if (!layer2) {
-      return { success: false, message: 'No active Layer 2 approval found to undo.' };
+    const isHarshil = isHarshilUser(currentUser.id);
+    const isVismay = isVismayUser(currentUser.id);
+
+    if (isHarshil && hasHarshilApproved(userTxnId)) {
+      return { success: false, message: 'Harshil Zaveri has already approved this transaction.' };
+    }
+    if (isVismay && hasVismayApproved(userTxnId)) {
+      return { success: false, message: 'Vismay Zaveri has already approved this transaction.' };
     }
 
-    const layer3 = approvals.find(a => a.user_txn_id === userTxnId && a.layer === 3 && a.decision === 'approved');
-    if (layer3) {
-      return { success: false, message: 'Cannot undo Layer 2 approval: Transaction is already closed at Layer 3.' };
-    }
+    // Determine assigned layer (2 or 3) to comply with Supabase onConflict: user_txn_id, layer
+    const existingAdminAppr = approvals.find(a => a.user_txn_id === userTxnId && (a.layer === 2 || a.layer === 3));
+    const assignedLayer: 2 | 3 = existingAdminAppr?.layer === 2 ? 3 : 2;
 
-    // Per Admin Exclusivity: The Admin who gave Layer 2 can undo their approval
-    if (layer2.approver_id !== currentUser.id) {
-      const approverName = users.find(u => u.id === layer2.approver_id)?.full_name || layer2.approver_id;
-      return { success: false, message: `Only ${approverName} can undo their own Layer 2 approval.` };
-    }
+    const maxApprId = approvals.reduce((max, a) => Math.max(max, a.id), 0);
+    const approvalRecord: Approval = {
+      id: maxApprId + 1,
+      user_txn_id: userTxnId,
+      layer: assignedLayer,
+      approver_id: currentUser.id,
+      decision: 'approved',
+      comment: comment || `Approved by ${currentUser.full_name}`,
+      decided_at: new Date().toISOString(),
+    };
 
-    // Remove layer 2 approval
-    const updatedApprovals = approvals.filter(a => !(a.user_txn_id === userTxnId && a.layer === 2));
+    const updatedApprovals = [...approvals.filter(a => !(a.user_txn_id === userTxnId && a.layer === assignedLayer)), approvalRecord];
     setApprovals(updatedApprovals);
     save('approvals', updatedApprovals);
 
-    // Revert status to 'in_approval' (preserving Layer 1)
+    // Check if the other admin has also approved
+    const otherAdminApproved = isHarshil ? hasVismayApproved(userTxnId) : isVismay ? hasHarshilApproved(userTxnId) : Boolean(existingAdminAppr);
+    const willBeFullyClosed = otherAdminApproved;
+
+    const updatedTxn = {
+      ...txn,
+      status: willBeFullyClosed ? ('approved' as const) : ('in_approval' as const),
+      updated_at: new Date().toISOString(),
+    };
+
+    const deltas = createCellAuditDelta('transactions_user', userTxnId, txn, updatedTxn, currentUser.id, recordVersions);
+    if (deltas.length > 0) {
+      const updatedVersions = [...deltas, ...recordVersions];
+      setRecordVersions(updatedVersions);
+      save('recordVersions', updatedVersions);
+      if (supabase) {
+        supabase.from('record_versions').insert(deltas).then(() => {});
+      }
+    }
+
+    const updatedTxns = userTransactions.map(t => (t.id === userTxnId ? updatedTxn : t));
+    setUserTransactions(updatedTxns);
+    save('userTransactions', updatedTxns);
+
+    if (supabase) {
+      supabase.from('approvals').upsert([approvalRecord], { onConflict: 'user_txn_id, layer' }).then(() => {});
+      supabase.from('transactions_user').update({
+        status: updatedTxn.status,
+        updated_at: updatedTxn.updated_at,
+      }).eq('id', userTxnId).then(() => {});
+    }
+
+    addComment(userTxnId, `[Approved by ${currentUser.full_name}]: ${comment || 'Verified and approved.'}`);
+
+    if (willBeFullyClosed) {
+      notifyRealtime(`Transaction ${userTxnId} approved by both Harshil & Vismay — CLOSED!`);
+      return { success: true, message: 'Approved by both Harshil & Vismay! Transaction is now CLOSED.' };
+    } else {
+      const otherName = isHarshil ? 'Vismay Zaveri' : 'Harshil Zaveri';
+      notifyRealtime(`Transaction ${userTxnId} approved by ${currentUser.full_name}. Awaiting ${otherName}.`);
+      return { success: true, message: `Approved by ${currentUser.full_name}! Waiting for final sign-off from ${otherName}.` };
+    }
+  };
+
+  const undoAdminApproval = (userTxnId: string): { success: boolean; message: string } => {
+    const txn = userTransactions.find(t => t.id === userTxnId);
+    if (!txn) return { success: false, message: 'Transaction not found.' };
+
+    if (currentRole !== 'Admin') {
+      return { success: false, message: 'Unauthorized: Only Group Admins can undo approval.' };
+    }
+
+    const isHarshil = isHarshilUser(currentUser.id);
+    const isVismay = isVismayUser(currentUser.id);
+
+    const myApproval = approvals.find(a =>
+      a.user_txn_id === userTxnId &&
+      a.decision === 'approved' &&
+      (a.approver_id === currentUser.id ||
+       (isHarshil && isHarshilUser(a.approver_id)) ||
+       (isVismay && isVismayUser(a.approver_id)))
+    );
+
+    if (!myApproval) {
+      return { success: false, message: 'No active approval found for your account to undo.' };
+    }
+
+    const updatedApprovals = approvals.filter(a => a.id !== myApproval.id);
+    setApprovals(updatedApprovals);
+    save('approvals', updatedApprovals);
+
+    // Revert status to 'in_approval'
     const updatedTxn = {
       ...txn,
       status: 'in_approval' as const,
@@ -2344,18 +2453,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     save('userTransactions', updatedTxns);
 
     if (supabase) {
-      supabase.from('approvals').delete().eq('user_txn_id', userTxnId).eq('layer', 2).then(() => {});
+      supabase.from('approvals').delete().eq('id', myApproval.id).then(() => {});
       supabase.from('transactions_user').update({
         status: 'in_approval',
         updated_at: updatedTxn.updated_at,
       }).eq('id', userTxnId).then(() => {});
     }
 
-    addComment(userTxnId, `[Layer 2 Approval Undone by ${currentUser.full_name}]: Transaction returned to Layer 2 queue.`);
-    notifyRealtime(`Layer 2 approval undone for ${userTxnId} by ${currentUser.full_name}.`);
+    addComment(userTxnId, `[Approval Undone by ${currentUser.full_name}]: Returned to pending review.`);
+    notifyRealtime(`Approval undone for ${userTxnId} by ${currentUser.full_name}.`);
 
-    return { success: true, message: 'Layer 2 approval undone. Transaction returned to Layer 2 queue.' };
+    return { success: true, message: `Your approval has been undone. Transaction returned to pending review.` };
   };
+
+  const undoLayer2Approval = undoAdminApproval;
 
   // Operational Action 7b: Company CRUD
   const addCompany = (data: Omit<Company, 'id' | 'created_at'>, customId?: string): Company => {
@@ -4122,6 +4233,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         markTransactionAsQueried,
         submitApproval,
         undoLayer2Approval,
+        isHarshilUser,
+        isVismayUser,
+        hasHarshilApproved,
+        hasVismayApproved,
+        submitAdminApproval,
+        undoAdminApproval,
         dismissedDuplicatePairs,
         dismissDuplicatePair,
         undismissDuplicatePair,

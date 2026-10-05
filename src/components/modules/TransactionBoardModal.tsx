@@ -27,6 +27,7 @@ import {
   Edit3,
   Save,
   ExternalLink,
+  CheckCheck,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { BankTransactionBoardModal } from './BankTransactionBoardModal';
@@ -57,6 +58,12 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
     deleteDocument,
     submitApproval,
     undoLayer2Approval,
+    hasHarshilApproved,
+    hasVismayApproved,
+    submitAdminApproval,
+    undoAdminApproval,
+    isHarshilUser,
+    isVismayUser,
     deleteUserTransaction,
     updateUserTransaction,
     updateUserTransactionCell,
@@ -125,6 +132,13 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
   const layer1 = txnApprovals.find(a => a.layer === 1 && a.decision === 'approved');
   const layer2 = txnApprovals.find(a => a.layer === 2 && a.decision === 'approved');
   const layer3 = txnApprovals.find(a => a.layer === 3 && a.decision === 'approved');
+  const harshilApproval = txnApprovals.find(a => a.decision === 'approved' && isHarshilUser(a.approver_id));
+  const vismayApproval = txnApprovals.find(a => a.decision === 'approved' && isVismayUser(a.approver_id));
+  const userIsHarshil = isHarshilUser(currentUser.id);
+  const userIsVismay = isVismayUser(currentUser.id);
+  const myApprovalDone = (userIsHarshil && hasHarshilApproved(currentTxn.id)) ||
+                         (userIsVismay && hasVismayApproved(currentTxn.id)) ||
+                         (!userIsHarshil && !userIsVismay && txnApprovals.some(a => a.decision === 'approved' && a.approver_id === currentUser.id));
 
   // Find Comments
   const txnComments = comments.filter(c => c.user_txn_id === currentTxn.id);
@@ -220,6 +234,26 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
     }
   };
 
+  const handleAdminApprove = () => {
+    const res = submitAdminApproval(currentTxn.id, approvalComment);
+    if (res.success) {
+      setApprovalFeedback(res.message);
+      setApprovalComment('');
+      confetti({ particleCount: 75, spread: 60, origin: { y: 0.6 } });
+    } else {
+      setApprovalFeedback(`Error: ${res.message}`);
+    }
+  };
+
+  const handleUndoAdminApproval = () => {
+    if (!window.confirm(`Undo your approval for transaction ${currentTxn.id}? It will return to pending review.`)) {
+      return;
+    }
+    const res = undoAdminApproval(currentTxn.id);
+    setApprovalFeedback(res.message);
+    setTimeout(() => setApprovalFeedback(null), 4000);
+  };
+
   const handleApprove = (layer: 1 | 2 | 3) => {
     const res = submitApproval(transaction.id, layer, 'approved', approvalComment);
     if (res.success) {
@@ -243,14 +277,7 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
     setTimeout(() => setApprovalFeedback(null), 4000);
   };
 
-  const handleUndoLayer2 = () => {
-    if (!window.confirm(`Undo your Layer 2 approval for transaction ${currentTxn.id}? It will return to the Layer 2 queue.`)) {
-      return;
-    }
-    const res = undoLayer2Approval(currentTxn.id);
-    setApprovalFeedback(res.message);
-    setTimeout(() => setApprovalFeedback(null), 4000);
-  };
+  const handleUndoLayer2 = handleUndoAdminApproval;
 
   const handleDeleteTransaction = () => {
     if (currentRole !== 'Admin') {
@@ -344,14 +371,20 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
             </div>
           ) : null}
 
-          {/* 3-Layer Governance Stepper */}
+          {/* Dual Admin Governance Stepper */}
           <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-3">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
-              3-Layer Approval Governance Workflow
-            </h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center space-x-1.5">
+                <CheckCheck className="w-4 h-4 text-emerald-600" />
+                <span>Approval Governance &amp; Dual Co-Founder Sign-off</span>
+              </h3>
+              <span className="text-[10px] text-slate-500 font-semibold">
+                Requires Both Harshil &amp; Vismay to Close
+              </span>
+            </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              {/* Layer 1 */}
+              {/* Layer 1: Closed in Match */}
               <div className={`p-3 rounded-lg border text-xs ${
                 layer1 ? 'bg-emerald-50 border-emerald-300 text-emerald-900' : 'bg-slate-50 border-slate-200 text-slate-500'
               }`}>
@@ -364,31 +397,31 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
                 </p>
               </div>
 
-              {/* Layer 2 */}
+              {/* Admin 1: Harshil Zaveri */}
               <div className={`p-3 rounded-lg border text-xs ${
-                layer2 ? 'bg-emerald-50 border-emerald-300 text-emerald-900' :
+                harshilApproval ? 'bg-emerald-50 border-emerald-300 text-emerald-900' :
                 layer1 ? 'bg-amber-50 border-amber-300 text-amber-900' : 'bg-slate-50 border-slate-200 text-slate-500'
               }`}>
                 <div className="flex items-center justify-between font-bold">
-                  <span>Layer 2: 1st Admin Approval</span>
-                  {layer2 ? <Check className="w-4 h-4 text-emerald-600" /> : <Clock className="w-4 h-4 text-slate-400" />}
+                  <span>Harshil Zaveri (Co-Founder)</span>
+                  {harshilApproval ? <Check className="w-4 h-4 text-emerald-600" /> : <Clock className="w-4 h-4 text-slate-400" />}
                 </div>
                 <p className="text-[11px] mt-1 text-slate-600">
-                  {layer2 ? `Approved by Admin ${layer2.approver_id} (Ready for Accounting)` : 'Awaiting Harshil or Vismay'}
+                  {harshilApproval ? `Approved (${formatDisplayDateTime(harshilApproval.decided_at)})` : 'Pending sign-off from Harshil'}
                 </p>
               </div>
 
-              {/* Layer 3 */}
+              {/* Admin 2: Vismay Zaveri */}
               <div className={`p-3 rounded-lg border text-xs ${
-                layer3 ? 'bg-emerald-50 border-emerald-300 text-emerald-900' :
-                layer2 ? 'bg-amber-50 border-amber-300 text-amber-900' : 'bg-slate-50 border-slate-200 text-slate-500'
+                vismayApproval ? 'bg-emerald-50 border-emerald-300 text-emerald-900' :
+                layer1 ? 'bg-amber-50 border-amber-300 text-amber-900' : 'bg-slate-50 border-slate-200 text-slate-500'
               }`}>
                 <div className="flex items-center justify-between font-bold">
-                  <span>Layer 3: 2nd Admin Review</span>
-                  {layer3 ? <Check className="w-4 h-4 text-emerald-600" /> : <Clock className="w-4 h-4 text-slate-400" />}
+                  <span>Vismay Zaveri (Co-Founder)</span>
+                  {vismayApproval ? <Check className="w-4 h-4 text-emerald-600" /> : <Clock className="w-4 h-4 text-slate-400" />}
                 </div>
                 <p className="text-[11px] mt-1 text-slate-600">
-                  {layer3 ? `Closed by Admin ${layer3.approver_id}` : layer2 ? 'Awaiting the OTHER Admin' : 'Pending Layer 2'}
+                  {vismayApproval ? `Approved (${formatDisplayDateTime(vismayApproval.decided_at)})` : 'Pending sign-off from Vismay'}
                 </p>
               </div>
             </div>
@@ -721,44 +754,37 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
                 />
 
                 <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-                  {!layer2 && (
+                  {!myApprovalDone ? (
                     <button
-                      onClick={() => handleApprove(2)}
-                      className="flex-1 sm:flex-none px-3.5 sm:px-4 py-2 sm:py-1.5 bg-rose-700 text-white rounded-lg text-xs font-bold hover:bg-rose-800 shadow-sm text-center cursor-pointer"
+                      onClick={handleAdminApprove}
+                      className="flex-1 sm:flex-none px-3.5 sm:px-4 py-2 sm:py-1.5 bg-emerald-700 text-white rounded-lg text-xs font-bold hover:bg-emerald-800 shadow-sm text-center flex items-center justify-center space-x-1.5 cursor-pointer"
                     >
-                      Layer 2 Approve
+                      <Check className="w-3.5 h-3.5" />
+                      <span>
+                        {userIsHarshil
+                          ? 'Approve as Harshil'
+                          : userIsVismay
+                          ? 'Approve as Vismay'
+                          : `Approve as Admin (${currentUser.full_name})`}
+                      </span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleUndoAdminApproval}
+                      className="flex-1 sm:flex-none px-3.5 sm:px-4 py-2 sm:py-1.5 bg-amber-600 text-white rounded-lg text-xs font-bold hover:bg-amber-700 shadow-sm text-center flex items-center justify-center space-x-1.5 cursor-pointer"
+                      title="Undo your approval and return transaction to pending review"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>Undo My Approval</span>
                     </button>
                   )}
 
-                  {layer2 && !layer3 && (
-                    layer2.approver_id === currentUser.id ? (
-                      <button
-                        onClick={handleUndoLayer2}
-                        className="flex-1 sm:flex-none px-3.5 sm:px-4 py-2 sm:py-1.5 bg-amber-600 text-white rounded-lg text-xs font-bold hover:bg-amber-700 shadow-sm text-center flex items-center justify-center space-x-1.5 cursor-pointer"
-                        title="Undo your Layer 2 approval and return transaction to Layer 2 queue"
-                      >
-                        <RotateCcw className="w-3.5 h-3.5" />
-                        <span>Undo My Layer 2 Approval</span>
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => handleApprove(3)}
-                        className="flex-1 sm:flex-none px-3.5 sm:px-4 py-2 sm:py-1.5 bg-emerald-700 text-white rounded-lg text-xs font-bold hover:bg-emerald-800 shadow-sm text-center cursor-pointer"
-                      >
-                        Layer 3 Review & Close
-                      </button>
-                    )
-                  )}
-
-                  {/* Move to Open & Raise Query are ONLY available if not locked by Admin Exclusivity */}
-                  {(!layer2 || layer2.approver_id !== currentUser.id || layer3) && (
-                    <>
-                      <button
-                        onClick={handleMoveToOpen}
-                        className="px-3 py-2 sm:py-1.5 bg-slate-200 text-rose-900 rounded-lg text-xs font-semibold hover:bg-rose-200 cursor-pointer"
-                      >
-                        Move to Open
-                      </button>
+                  <button
+                    onClick={handleMoveToOpen}
+                    className="px-3 py-2 sm:py-1.5 bg-slate-200 text-rose-900 rounded-lg text-xs font-semibold hover:bg-rose-200 cursor-pointer"
+                  >
+                    Move to Open
+                  </button>
 
                       <button
                         type="button"
@@ -775,14 +801,6 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
                       >
                         Raise Query (QUERY Tag)
                       </button>
-                    </>
-                  )}
-
-                  {layer2 && !layer3 && layer2.approver_id === currentUser.id && (
-                    <span className="text-[11px] text-amber-800 bg-amber-100/80 border border-amber-200 px-2.5 py-1 rounded-md font-medium">
-                      You approved Layer 2 &bull; Awaiting other Admin for final review
-                    </span>
-                  )}
 
                   <button
                     type="button"
