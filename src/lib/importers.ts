@@ -253,6 +253,7 @@ export interface ParsedBankRow {
   account_id: string;
   value_date: string;
   narration: string;
+  party_name?: string;
   reference_no?: string;
   debit: number;
   credit: number;
@@ -405,6 +406,7 @@ export function parseBankStatementDelimitedRows(
   const header = rows[0].map(c => c.toLowerCase().trim());
   let dateIdx = header.findIndex(c => c.includes('date') || c.includes('value'));
   let narrIdx = header.findIndex(c => c.includes('narration') || c.includes('particular') || c.includes('description'));
+  let partyIdx = header.findIndex(c => c.includes('party') || c.includes('counterparty') || c.includes('beneficiary') || c.includes('remitter') || c.includes('vendor') || c.includes('client'));
   let refIdx = header.findIndex(c => c.includes('ref') || c.includes('chq') || c.includes('utr'));
   let debitIdx = header.findIndex(c => c.includes('debit') || c.includes('withdrawal') || c.includes('dr'));
   let creditIdx = header.findIndex(c => c.includes('credit') || c.includes('deposit') || c.includes('cr'));
@@ -429,6 +431,18 @@ export function parseBankStatementDelimitedRows(
     const narration = (narrIdx !== -1 && cols[narrIdx]) ? cols[narrIdx].trim() : 'Bank Transaction';
     const refNo = (refIdx !== -1 && cols[refIdx]) ? cols[refIdx].trim() : undefined;
     const balanceAfter = (balIdx !== -1 && cols[balIdx]) ? cleanCurrencyAmount(cols[balIdx]) : undefined;
+
+    let rawParty = partyIdx !== -1 && cols[partyIdx] ? cols[partyIdx].trim() : undefined;
+    // Smart fallback: Extract party hint from standard bank narration formats if no party column is present
+    if (!rawParty && narration) {
+      const dashParts = narration.split(/\s*-\s*|\s*–\s*/);
+      if (dashParts.length >= 2) {
+        const candidate = dashParts[1].trim();
+        if (candidate.length > 2 && !candidate.startsWith('INV') && !candidate.startsWith('UTR') && !candidate.startsWith('CMS')) {
+          rawParty = candidate;
+        }
+      }
+    }
 
     let debit = 0;
     let credit = 0;
@@ -464,6 +478,7 @@ export function parseBankStatementDelimitedRows(
       account_id: accId,
       value_date: isoDate || dateRaw,
       narration,
+      party_name: rawParty || undefined,
       reference_no: refNo,
       debit,
       credit,
@@ -752,11 +767,12 @@ export function downloadSampleCsvTemplate(type: 'bank' | 'user') {
   if (type === 'bank') {
     filename = 'StarRuby_Bank_Statement_Template.csv';
     content = [
-      'Account_ID,Date,Narration,Reference_No,Debit,Credit,Balance_After,Description',
-      'BNK1,2026-09-28,NEFT-CMS-Bangkok Gems & Stones-INV8821,UTR99281726,35000,0,1250000,Payment for sapphire rough lot',
-      'BNK1,2026-09-29,RTGS-Raw Gem Importer-ADV401,UTR11029384,0,15000,1265000,Advance deposit for rubies',
-      'BNK3,2026-09-30,WIRE TRANSFER-Blue Ocean Trading LLC,FT262719,82000,0,510000,Prepayment invoice 4092',
-      'BNK2,2026-09-30,CHQ WDL-Self Clearing 004128,CHQ004128,50000,0,890000,Operational cash withdrawal',
+      'Account_ID,Date,Party_Name,Narration,Reference_No,Debit,Credit,Balance_After,Description',
+      'BNK1,2026-05-11,JS DIAMONDS LTD,Inward Remittance - JS DIAMONDS LTD - CO-OPERATIVE BANK PLC.,033IWCF261310540,0,32638,109420.24,Export proceeds invoice 104',
+      'BNK1,2026-09-28,Bangkok Gems & Stones Co.,NEFT-CMS-Bangkok Gems & Stones-INV8821,UTR99281726,35000,0,1250000,Payment for sapphire rough lot',
+      'BNK1,2026-09-29,Raw Gem Importer,RTGS-Raw Gem Importer-ADV401,UTR11029384,0,15000,1265000,Advance deposit for rubies',
+      'BNK3,2026-09-30,Blue Ocean Trading LLC,WIRE TRANSFER-Blue Ocean Trading LLC,FT262719,82000,0,510000,Prepayment invoice 4092',
+      'BNK2,2026-09-30,Self Clearing,CHQ WDL-Self Clearing 004128,CHQ004128,50000,0,890000,Operational cash withdrawal',
     ].join('\n');
   } else {
     filename = 'StarRuby_User_Transactions_Template.csv';

@@ -135,6 +135,7 @@ export interface BankTransaction {
   id: string; // BTRN101, BTRN102...
   account_id: string;
   party_id?: string; // Auto-resolved from narration or mapped alias
+  party_name_raw?: string; // Bank-side party name (logged as alias)
   value_date: string;
   narration: string; // Kept verbatim, never aliased
   description?: string; // Our separate note

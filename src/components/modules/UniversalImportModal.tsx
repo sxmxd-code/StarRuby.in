@@ -15,6 +15,7 @@ import {
   ParsedUserRow,
 } from '../../lib/importers';
 import { formatDisplayDate } from '../../lib/formatters';
+import { normalizeAlias } from '../../lib/alias';
 import {
   X,
   Upload,
@@ -54,6 +55,7 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
     accounts,
     scopedAccounts,
     parties,
+    addParty,
     scopedBankTransactions,
     scopedUserTransactions,
     addBankTransactionsBatch,
@@ -362,6 +364,7 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
         account_id: r.account_id || targetAccountId,
         value_date: r.value_date,
         narration: r.narration,
+        party_name_raw: r.party_name || undefined,
         reference_no: r.reference_no,
         debit: r.debit,
         credit: r.credit,
@@ -381,6 +384,32 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
         return true;
       });
 
+      // 1. Auto-register any new parties in the database master
+      const partyMap = new Map<string, string>(); // normalizedName -> partyId
+      parties.forEach(p => {
+        if (p.system_name) partyMap.set(normalizeAlias(p.system_name), p.id);
+        if (p.party_name) partyMap.set(normalizeAlias(p.party_name), p.id);
+        if (p.party_name_raw) {
+          const rawArr = Array.isArray(p.party_name_raw) ? p.party_name_raw : [p.party_name_raw];
+          rawArr.forEach(item => partyMap.set(normalizeAlias(item), p.id));
+        }
+      });
+
+      candidates.forEach(r => {
+        const rawName = r.party_name ? r.party_name.trim() : '';
+        if (!rawName) return;
+        const norm = normalizeAlias(rawName);
+        if (!partyMap.has(norm)) {
+          const created = addParty({
+            system_name: rawName,
+            party_name: rawName,
+            party_name_raw: rawName,
+          });
+          partyMap.set(norm, created.id);
+        }
+      });
+
+      // 2. Map user transactions to resolved party IDs
       const toInsert = candidates.map(r => {
         const accId = r.account_id || targetAccountId;
         const acc = accounts.find(a => a.id === accId);
@@ -389,15 +418,12 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
         const inr = rate && rate > 0 ? Number((r.amount * rate).toFixed(2)) : undefined;
 
         const rowPartyName = r.party_name ? r.party_name.trim() : '';
-        const rowPartyLower = rowPartyName.toLowerCase();
-        const matchedParty = rowPartyLower ? parties.find(
-          p => (p.system_name && p.system_name.toLowerCase() === rowPartyLower) ||
-               (p.party_name && p.party_name.toLowerCase() === rowPartyLower)
-        ) : undefined;
+        const norm = normalizeAlias(rowPartyName);
+        const resolvedPartyId = norm ? partyMap.get(norm) : undefined;
 
         return {
           account_id: accId,
-          party_id: matchedParty?.id,
+          party_id: resolvedPartyId,
           party_name_raw: rowPartyName,
           date_of_transaction: r.date,
           currency: curr,
@@ -762,6 +788,7 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
                       <th className="p-2.5 w-24">Date</th>
                       {mode === 'bank' ? (
                         <>
+                          <th className="p-2.5 w-36">Party (Bank Alias)</th>
                           <th className="p-2.5">Narration / Particulars</th>
                           <th className="p-2.5 w-28">Ref / Chq</th>
                           <th className="p-2.5 w-24 text-right">Debit</th>
@@ -783,7 +810,7 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
                   <tbody className="divide-y divide-slate-100">
                     {filteredDisplayRows.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="p-8 text-center text-slate-400 text-xs">
+                        <td colSpan={9} className="p-8 text-center text-slate-400 text-xs">
                           No rows match the selected filter view.
                         </td>
                       </tr>
@@ -825,6 +852,15 @@ export const UniversalImportModal: React.FC<UniversalImportModalProps> = ({
                               <>
                                 <td className="p-2.5 font-mono text-[11px] whitespace-nowrap">
                                   {formatDisplayDate((row as ParsedBankRow).value_date)}
+                                </td>
+                                <td className="p-2.5 font-medium max-w-[140px] truncate" title={(row as ParsedBankRow).party_name || 'Unspecified'}>
+                                  {(row as ParsedBankRow).party_name ? (
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-blue-50 text-blue-800 font-semibold text-[11px] border border-blue-200">
+                                      {(row as ParsedBankRow).party_name}
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400 italic text-[11px]">-</span>
+                                  )}
                                 </td>
                                 <td className="p-2.5 font-medium max-w-xs truncate" title={(row as ParsedBankRow).narration}>
                                   <div>

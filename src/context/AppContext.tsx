@@ -388,26 +388,121 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setSignatories(sigRes.data);
           save('signatories', sigRes.data);
         }
-        if (!ptyRes.error && Array.isArray(ptyRes.data)) {
-          setParties(ptyRes.data);
-          save('parties', ptyRes.data);
+        let loadedParties = !ptyRes.error && Array.isArray(ptyRes.data) ? (ptyRes.data as Party[]) : parties;
+        let loadedAliases = !aliasRes.error && Array.isArray(aliasRes.data) ? (aliasRes.data as PartyAlias[]) : partyAliases;
+        let loadedUTxns = !uTxnRes.error && Array.isArray(uTxnRes.data) ? (uTxnRes.data as UserTransaction[]) : userTransactions;
+        let loadedBTxns = !bTxnRes.error && Array.isArray(bTxnRes.data) ? (bTxnRes.data as BankTransaction[]) : bankTransactions;
+
+        // Startup Self-Healing: Auto-register outside parties from User Transactions if missing in master
+        let partiesUpdated = false;
+        let aliasesUpdated = false;
+        let uTxnsUpdated = false;
+        let bTxnsUpdated = false;
+
+        let maxPartyNum = loadedParties.reduce((acc, p) => {
+          const num = parseInt(p.id.replace(/\D/g, ''), 10);
+          return isNaN(num) ? acc : Math.max(acc, num);
+        }, 100);
+
+        let maxAliasNum = loadedAliases.reduce((acc, a) => {
+          const num = parseInt(a.id.replace(/\D/g, ''), 10);
+          return isNaN(num) ? acc : Math.max(acc, num);
+        }, 100);
+
+        const partyMap = new Map<string, Party>();
+        loadedParties.forEach(p => {
+          if (p.system_name) partyMap.set(normalizeAlias(p.system_name), p);
+          if (p.party_name) partyMap.set(normalizeAlias(p.party_name), p);
+          if (p.party_name_raw) {
+            const rawArr = Array.isArray(p.party_name_raw) ? p.party_name_raw : [p.party_name_raw];
+            rawArr.forEach(item => partyMap.set(normalizeAlias(item), p));
+          }
+        });
+
+        // 1. Scan user transactions to auto-register missing parties in masters
+        for (let i = 0; i < loadedUTxns.length; i++) {
+          const txn = loadedUTxns[i];
+          const rawName = txn.party_name_raw ? txn.party_name_raw.trim() : '';
+          if (!rawName) continue;
+
+          const norm = normalizeAlias(rawName);
+          let matched = partyMap.get(norm);
+
+          if (!matched) {
+            maxPartyNum++;
+            const newPartyId = `PTY${maxPartyNum}`;
+            const newParty: Party = {
+              id: newPartyId,
+              system_name: rawName,
+              party_name: rawName,
+              party_name_raw: [rawName],
+              created_at: new Date().toISOString(),
+            };
+            loadedParties = [...loadedParties, newParty];
+            partyMap.set(norm, newParty);
+            partiesUpdated = true;
+            matched = newParty;
+            if (sb) sb.from('parties').upsert([newParty]).then(() => {});
+
+            // Auto-create initial mapped alias
+            if (!loadedAliases.some(a => a.alias_normalized === norm)) {
+              maxAliasNum++;
+              const newAlias: PartyAlias = {
+                id: `PALIAS${maxAliasNum}`,
+                alias_name: rawName,
+                alias_normalized: norm,
+                party_id: newPartyId,
+                status: 'mapped',
+                created_by: 'USR1',
+                created_at: new Date().toISOString(),
+              };
+              loadedAliases = [...loadedAliases, newAlias];
+              aliasesUpdated = true;
+              if (sb) sb.from('party_aliases').upsert([newAlias]).then(() => {});
+            }
+          }
+
+          if (txn.party_id !== matched.id) {
+            loadedUTxns[i] = { ...txn, party_id: matched.id };
+            uTxnsUpdated = true;
+            if (sb) sb.from('transactions_user').update({ party_id: matched.id }).eq('id', txn.id).then(() => {});
+          }
         }
-        if (!aliasRes.error && Array.isArray(aliasRes.data)) {
-          setPartyAliases(aliasRes.data);
-          save('partyAliases', aliasRes.data);
+
+        // 2. Scan bank transactions to link missing party_id if matching alias exists
+        for (let j = 0; j < loadedBTxns.length; j++) {
+          const b = loadedBTxns[j];
+          if (!b.party_id) {
+            const rawParty = b.party_name_raw || b.narration;
+            if (rawParty) {
+              const norm = normalizeAlias(rawParty);
+              const matchedAlias = loadedAliases.find(a => a.status === 'mapped' && a.party_id && (a.alias_normalized === norm || normalizeAlias(a.alias_name) === norm));
+              const resolvedId = matchedAlias?.party_id || partyMap.get(norm)?.id;
+              if (resolvedId) {
+                loadedBTxns[j] = { ...b, party_id: resolvedId };
+                bTxnsUpdated = true;
+                if (sb) sb.from('transactions_bank').update({ party_id: resolvedId }).eq('id', b.id).then(() => {});
+              }
+            }
+          }
         }
+
+        setParties(loadedParties);
+        save('parties', loadedParties);
+
+        setPartyAliases(loadedAliases);
+        save('partyAliases', loadedAliases);
+
         if (!tplRes.error && Array.isArray(tplRes.data)) {
           setPartyTemplates(tplRes.data);
           save('partyTemplates', tplRes.data);
         }
-        if (!uTxnRes.error && Array.isArray(uTxnRes.data)) {
-          setUserTransactions(uTxnRes.data);
-          save('userTransactions', uTxnRes.data);
-        }
-        if (!bTxnRes.error && Array.isArray(bTxnRes.data)) {
-          setBankTransactions(bTxnRes.data);
-          save('bankTransactions', bTxnRes.data);
-        }
+
+        setUserTransactions(loadedUTxns);
+        save('userTransactions', loadedUTxns);
+
+        setBankTransactions(loadedBTxns);
+        save('bankTransactions', loadedBTxns);
         if (!linksRes.error && Array.isArray(linksRes.data)) {
           setTxnBankLinks(linksRes.data);
           save('txnBankLinks', linksRes.data);
@@ -1038,30 +1133,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // Create an alias record if brand new
         const aliasExists = partyAliases.some(a => a.alias_normalized === normalizedTyped);
         if (!aliasExists && normalizedTyped) {
-          // Check exact party system name match
-          const exactParty = parties.find(p => normalizeAlias(p.system_name || p.party_name || '') === normalizedTyped);
-          const maxAliasNum = partyAliases.reduce((acc, a) => {
-            const num = parseInt(a.id.replace(/\D/g, ''), 10);
-            return isNaN(num) ? acc : Math.max(acc, num);
-          }, 0);
-          const newAlias: PartyAlias = {
-            id: `PALIAS${maxAliasNum + 1}`,
-            alias_name: data.party_name_raw,
-            alias_normalized: normalizedTyped,
-            party_id: exactParty?.id,
-            status: exactParty ? 'mapped' : 'unmapped',
-            created_by: currentUser.id,
-            created_at: now,
-          };
-          const updatedAliases = [...partyAliases, newAlias];
-          setPartyAliases(updatedAliases);
-          save('partyAliases', updatedAliases);
-
-          if (supabase) {
-            supabase.from('party_aliases').insert([newAlias]).then(() => {});
+          // Check exact party system name match or auto-register into master
+          let targetParty = parties.find(
+            p => normalizeAlias(p.system_name || p.party_name || '') === normalizedTyped ||
+                 (p.party_name_raw && (Array.isArray(p.party_name_raw) ? p.party_name_raw : [p.party_name_raw]).some(r => normalizeAlias(r) === normalizedTyped))
+          );
+          if (!targetParty) {
+            targetParty = addParty({
+              system_name: data.party_name_raw.trim(),
+              party_name: data.party_name_raw.trim(),
+              party_name_raw: [data.party_name_raw.trim()],
+            });
           }
-
-          if (exactParty) resolvedPartyId = exactParty.id;
+          resolvedPartyId = targetParty.id;
         }
       }
     }
@@ -1141,15 +1225,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       currentMax++;
       const newId = `UTRN${currentMax}`;
 
-      // Resolve party if raw name provided
+      // Resolve party if raw name provided, auto-registering into master if missing
       let resolvedPartyId = data.party_id;
-      if (!resolvedPartyId && data.party_name_raw) {
-        const norm = normalizeAlias(data.party_name_raw);
+      const rawPartyName = data.party_name_raw ? data.party_name_raw.trim() : '';
+      if (!resolvedPartyId && rawPartyName) {
+        const norm = normalizeAlias(rawPartyName);
         const match = parties.find(
           p => (p.system_name && normalizeAlias(p.system_name) === norm) ||
-               normalizeAlias(p.party_name) === norm
+               normalizeAlias(p.party_name) === norm ||
+               (p.party_name_raw && (Array.isArray(p.party_name_raw) ? p.party_name_raw : [p.party_name_raw]).some(r => normalizeAlias(r) === norm))
         );
-        if (match) resolvedPartyId = match.id;
+        if (match) {
+          resolvedPartyId = match.id;
+        } else {
+          const created = addParty({
+            system_name: rawPartyName,
+            party_name: rawPartyName,
+            party_name_raw: [rawPartyName],
+          });
+          resolvedPartyId = created.id;
+        }
       }
 
       newTxns.push({
@@ -1299,13 +1394,62 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newId = `BTRN${maxNum + 1}`;
     const now = new Date().toISOString();
 
-    // Auto-resolve party from narration if not provided
+    // Auto-resolve party from party_name_raw first, then narration fallback
     let resolvedPartyId = data.party_id;
+    const rawBankParty = data.party_name_raw ? data.party_name_raw.trim() : '';
+
+    if (!resolvedPartyId && rawBankParty) {
+      const norm = normalizeAlias(rawBankParty);
+      const matchedAlias = partyAliases.find(
+        a => (a.alias_normalized === norm || normalizeAlias(a.alias_name || '') === norm) && a.status === 'mapped' && a.party_id
+      );
+      if (matchedAlias) {
+        resolvedPartyId = matchedAlias.party_id;
+      } else {
+        const directParty = parties.find(p => {
+          if (p.system_name && normalizeAlias(p.system_name) === norm) return true;
+          if (p.party_name && normalizeAlias(p.party_name) === norm) return true;
+          if (p.party_name_raw) {
+            const rawArr = Array.isArray(p.party_name_raw) ? p.party_name_raw : [p.party_name_raw];
+            return rawArr.some(r => normalizeAlias(r) === norm);
+          }
+          return false;
+        });
+        if (directParty) {
+          resolvedPartyId = directParty.id;
+        } else {
+          // Log as unmapped alias in party_aliases
+          const aliasExists = partyAliases.some(a => a.alias_normalized === norm);
+          if (!aliasExists) {
+            const maxAliasId = partyAliases.reduce((acc, a) => {
+              const num = parseInt(a.id.replace(/\D/g, ''), 10);
+              return isNaN(num) ? acc : Math.max(acc, num);
+            }, 0);
+            const newAlias: PartyAlias = {
+              id: `PALIAS${maxAliasId + 1}`,
+              alias_name: rawBankParty,
+              alias_normalized: norm,
+              status: 'unmapped',
+              created_by: currentUser.id,
+              created_at: now,
+            };
+            const updatedAliases = [newAlias, ...partyAliases];
+            setPartyAliases(updatedAliases);
+            save('partyAliases', updatedAliases);
+            if (supabase) {
+              supabase.from('party_aliases').insert([newAlias]).then(() => {});
+            }
+          }
+        }
+      }
+    }
+
+    // Fallback: Auto-resolve party from narration if not provided
     if (!resolvedPartyId && data.narration) {
       const match = resolvePartyFromNarration(data.narration, parties, partyAliases);
       if (match.party) {
         resolvedPartyId = match.party.id;
-      } else if (data.narration.trim().length >= 3) {
+      } else if (data.narration.trim().length >= 3 && !rawBankParty) {
         const norm = normalizeAlias(data.narration);
         const exists = partyAliases.some(a => a.alias_normalized === norm);
         if (!exists) {
@@ -1345,8 +1489,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     save('bankTransactions', updated);
 
     if (supabase) {
-      supabase.from('transactions_bank').insert([newTxn]).then(({ error }) => {
-        if (error) console.warn('Supabase insert bank transaction notice:', error.message);
+      const sb = supabase;
+      sb.from('transactions_bank').insert([newTxn]).then(({ error }) => {
+        if (error) {
+          if (error.message && error.message.includes('party_name_raw')) {
+            const { party_name_raw, ...fallbackTxn } = newTxn;
+            sb.from('transactions_bank').insert([fallbackTxn]).then(() => {});
+          } else {
+            console.warn('Supabase insert bank transaction notice:', error.message);
+          }
+        }
       });
     }
 
@@ -1373,13 +1525,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const now = new Date().toISOString();
     const newTxns: BankTransaction[] = [];
+    const newAliasesToInsert: PartyAlias[] = [];
+    let currentAliasMax = partyAliases.reduce((acc, a) => {
+      const num = parseInt(a.id.replace(/\D/g, ''), 10);
+      return isNaN(num) ? acc : Math.max(acc, num);
+    }, 100);
 
     for (const data of txnsData) {
       currentMax++;
       const newId = `BTRN${currentMax}`;
 
-      // Auto-resolve party from narration if not provided
       let resolvedPartyId = data.party_id;
+      const rawBankParty = data.party_name_raw ? data.party_name_raw.trim() : '';
+
+      if (!resolvedPartyId && rawBankParty) {
+        const norm = normalizeAlias(rawBankParty);
+        const matchedAlias = partyAliases.find(
+          a => (a.alias_normalized === norm || normalizeAlias(a.alias_name || '') === norm) && a.status === 'mapped' && a.party_id
+        );
+        if (matchedAlias) {
+          resolvedPartyId = matchedAlias.party_id;
+        } else {
+          const directParty = parties.find(p => {
+            if (p.system_name && normalizeAlias(p.system_name) === norm) return true;
+            if (p.party_name && normalizeAlias(p.party_name) === norm) return true;
+            if (p.party_name_raw) {
+              const rawArr = Array.isArray(p.party_name_raw) ? p.party_name_raw : [p.party_name_raw];
+              return rawArr.some(r => normalizeAlias(r) === norm);
+            }
+            return false;
+          });
+          if (directParty) {
+            resolvedPartyId = directParty.id;
+          } else {
+            const aliasExists = partyAliases.some(a => a.alias_normalized === norm) || newAliasesToInsert.some(a => a.alias_normalized === norm);
+            if (!aliasExists) {
+              currentAliasMax++;
+              newAliasesToInsert.push({
+                id: `PALIAS${currentAliasMax}`,
+                alias_name: rawBankParty,
+                alias_normalized: norm,
+                status: 'unmapped',
+                created_by: currentUser.id,
+                created_at: now,
+              });
+            }
+          }
+        }
+      }
+
+      // Auto-resolve party from narration if not provided
       if (!resolvedPartyId && data.narration) {
         const match = resolvePartyFromNarration(data.narration, parties, partyAliases);
         if (match.party) {
@@ -1397,13 +1592,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     }
 
+    if (newAliasesToInsert.length > 0) {
+      const nextAliases = [...newAliasesToInsert, ...partyAliases];
+      setPartyAliases(nextAliases);
+      save('partyAliases', nextAliases);
+      if (supabase) {
+        supabase.from('party_aliases').insert(newAliasesToInsert).then(() => {});
+      }
+    }
+
     const updated = [...newTxns, ...bankTransactions];
     setBankTransactions(updated);
     save('bankTransactions', updated);
 
     if (supabase && newTxns.length > 0) {
-      supabase.from('transactions_bank').insert(newTxns).then(({ error }) => {
-        if (error) console.warn('Supabase batch insert bank transactions error:', error.message);
+      const sb = supabase;
+      sb.from('transactions_bank').insert(newTxns).then(({ error }) => {
+        if (error) {
+          if (error.message && error.message.includes('party_name_raw')) {
+            const fallbackTxns = newTxns.map(({ party_name_raw, ...rest }) => rest);
+            sb.from('transactions_bank').insert(fallbackTxns).then(() => {});
+          } else {
+            console.warn('Supabase batch insert bank transactions error:', error.message);
+          }
+        }
       });
     }
 
@@ -1522,6 +1734,99 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (supabase) {
       supabase.from('txn_bank_links').insert([newLink]).then(() => {});
+    }
+
+    // Two-Way Alias Linking Engine (Method 1)
+    // When a user transaction is linked to a bank transaction:
+    // The bank party name / alias gets permanently mapped to the user transaction's Party System Name
+    // for this transaction, retroactively for past transactions, and learned for all future transactions!
+    const userTxn = userTransactions.find(u => u.id === userTxnId);
+    const bankTxn = bankTransactions.find(b => b.id === bankTxnId);
+
+    if (userTxn && userTxn.party_id && bankTxn) {
+      const targetPartyId = userTxn.party_id;
+      const targetParty = parties.find(p => p.id === targetPartyId);
+      const rawBankAlias = bankTxn.party_name_raw || bankTxn.narration;
+
+      if (rawBankAlias && rawBankAlias.trim()) {
+        const norm = normalizeAlias(rawBankAlias);
+
+        // 1. Update or create alias in party_aliases
+        let aliasUpdated = false;
+        let nextAliases = partyAliases.map(a => {
+          if (a.alias_normalized === norm || normalizeAlias(a.alias_name || '') === norm) {
+            aliasUpdated = true;
+            return { ...a, party_id: targetPartyId, status: 'mapped' as const };
+          }
+          return a;
+        });
+
+        if (!aliasUpdated) {
+          const maxNum = partyAliases.reduce((acc, a) => {
+            const num = parseInt(a.id.replace(/\D/g, ''), 10);
+            return isNaN(num) ? acc : Math.max(acc, num);
+          }, 0);
+          const newAlias: PartyAlias = {
+            id: `PALIAS${maxNum + 1}`,
+            alias_name: rawBankAlias.trim(),
+            alias_normalized: norm,
+            party_id: targetPartyId,
+            status: 'mapped',
+            created_by: currentUser.id,
+            created_at: new Date().toISOString(),
+          };
+          nextAliases = [newAlias, ...nextAliases];
+          if (supabase) supabase.from('party_aliases').insert([newAlias]).then(() => {});
+        } else {
+          if (supabase) {
+            supabase.from('party_aliases').update({ party_id: targetPartyId, status: 'mapped' }).eq('alias_normalized', norm).then(() => {});
+          }
+        }
+        setPartyAliases(nextAliases);
+        save('partyAliases', nextAliases);
+
+        // 2. Append alias to target party's raw aliases array if not present
+        if (targetParty) {
+          const currentArr = Array.isArray(targetParty.party_name_raw)
+            ? targetParty.party_name_raw
+            : targetParty.party_name_raw
+            ? [targetParty.party_name_raw]
+            : [];
+          if (!currentArr.some(a => a.toLowerCase() === rawBankAlias.trim().toLowerCase())) {
+            const nextArr = [...currentArr, rawBankAlias.trim()];
+            const updatedParty = { ...targetParty, party_name_raw: nextArr };
+            const nextParties = parties.map(p => p.id === targetPartyId ? updatedParty : p);
+            setParties(nextParties);
+            save('parties', nextParties);
+            if (supabase) {
+              supabase.from('parties').update({ party_name_raw: nextArr }).eq('id', targetPartyId).then(() => {});
+            }
+          }
+        }
+
+        // 3. Set party_id on current bankTxn & retroactively on other matching bankTxns
+        const matchingBankIds: string[] = [];
+        const nextBankTxns = bankTransactions.map(b => {
+          const bRaw = b.party_name_raw ? normalizeAlias(b.party_name_raw) : '';
+          const bNarr = b.narration ? normalizeAlias(b.narration) : '';
+          const matches = b.id === bankTxnId || (bRaw && bRaw === norm) || (bNarr && (bNarr === norm || bNarr.includes(norm)));
+          if (matches && (!b.party_id || b.party_id !== targetPartyId)) {
+            matchingBankIds.push(b.id);
+            return { ...b, party_id: targetPartyId, updated_at: new Date().toISOString() };
+          }
+          return b;
+        });
+
+        if (matchingBankIds.length > 0) {
+          setBankTransactions(nextBankTxns);
+          save('bankTransactions', nextBankTxns);
+          if (supabase) {
+            supabase.from('transactions_bank').update({ party_id: targetPartyId, updated_at: new Date().toISOString() }).in('id', matchingBankIds).then(() => {});
+          }
+        }
+
+        notifyRealtime(`Learned Bank Alias: "${rawBankAlias}" is now permanently mapped to ${targetParty?.system_name || 'Party'}.`);
+      }
     }
   };
 
@@ -2790,6 +3095,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (supabase && matchingTxnIds.length > 0) {
         supabase.from('transactions_user').update({ party_id: partyId, updated_at: new Date().toISOString() }).in('id', matchingTxnIds).then(() => {});
       }
+
+      // Also retroactive update bank transactions
+      const matchingBankIds: string[] = [];
+      const nextBankTxns = bankTransactions.map(b => {
+        const bRaw = b.party_name_raw ? normalizeAlias(b.party_name_raw) : '';
+        const bNarr = b.narration ? normalizeAlias(b.narration) : '';
+        const matches = (bRaw && bRaw === norm) || (bNarr && (bNarr === norm || bNarr.includes(norm)));
+        if (matches && (!b.party_id || b.party_id !== partyId)) {
+          matchingBankIds.push(b.id);
+          return { ...b, party_id: partyId, updated_at: new Date().toISOString() };
+        }
+        return b;
+      });
+      if (matchingBankIds.length > 0) {
+        setBankTransactions(nextBankTxns);
+        save('bankTransactions', nextBankTxns);
+        if (supabase) {
+          supabase.from('transactions_bank').update({ party_id: partyId, updated_at: new Date().toISOString() }).in('id', matchingBankIds).then(() => {});
+        }
+      }
     }
   };
 
@@ -2820,7 +3145,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       supabase.from('party_aliases').update({ party_id: partyId, status: 'mapped' }).eq('id', aliasId).then(() => {});
     }
 
-    // 2. RETROACTIVE UPDATE: update all user transactions with matching raw/normalized name!
+    // 2. Append alias to target party's raw aliases array if not present
+    const targetParty = parties.find(p => p.id === partyId);
+    if (targetParty) {
+      const currentRaw = Array.isArray(targetParty.party_name_raw)
+        ? targetParty.party_name_raw
+        : targetParty.party_name_raw
+        ? [targetParty.party_name_raw]
+        : [];
+      if (!currentRaw.some(r => normalizeAlias(r) === alias.alias_normalized)) {
+        const nextRaw = [...currentRaw, alias.alias_name];
+        const nextParty = { ...targetParty, party_name_raw: nextRaw };
+        const nextParties = parties.map(p => p.id === partyId ? nextParty : p);
+        setParties(nextParties);
+        save('parties', nextParties);
+        if (supabase) {
+          supabase.from('parties').update({ party_name_raw: nextRaw }).eq('id', partyId).then(() => {});
+        }
+      }
+    }
+
+    // 3. RETROACTIVE UPDATE: update all user transactions with matching raw/normalized name!
     const matchingTxnIds: string[] = [];
     const updatedTxns = userTransactions.map(t => {
       if (normalizeAlias(t.party_name_raw) === alias.alias_normalized && (!t.party_id || t.party_id !== partyId)) {
@@ -2834,6 +3179,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (supabase && matchingTxnIds.length > 0) {
       supabase.from('transactions_user').update({ party_id: partyId, updated_at: new Date().toISOString() }).in('id', matchingTxnIds).then(() => {});
     }
+
+    // 4. RETROACTIVE UPDATE: update all bank transactions matching this alias!
+    const matchingBankTxnIds: string[] = [];
+    const updatedBankTxns = bankTransactions.map(b => {
+      const bRaw = b.party_name_raw ? normalizeAlias(b.party_name_raw) : '';
+      const bNarr = b.narration ? normalizeAlias(b.narration) : '';
+      const matches = (bRaw && bRaw === alias.alias_normalized) || (bNarr && (bNarr === alias.alias_normalized || bNarr.includes(alias.alias_normalized)));
+      if (matches && (!b.party_id || b.party_id !== partyId)) {
+        matchingBankTxnIds.push(b.id);
+        return { ...b, party_id: partyId, updated_at: new Date().toISOString() };
+      }
+      return b;
+    });
+    if (matchingBankTxnIds.length > 0) {
+      setBankTransactions(updatedBankTxns);
+      save('bankTransactions', updatedBankTxns);
+      if (supabase) {
+        supabase.from('transactions_bank').update({ party_id: partyId, updated_at: new Date().toISOString() }).in('id', matchingBankTxnIds).then(() => {});
+      }
+    }
+
+    notifyRealtime(`Party alias "${alias.alias_name}" mapped to ${targetParty?.system_name || 'Party'}.`);
   };
 
   const createPartyFromAlias = (aliasId: string, cleanSystemName: string, groupName?: string): Party => {

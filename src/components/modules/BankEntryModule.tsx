@@ -86,6 +86,7 @@ export const BankEntryModule: React.FC = () => {
   const [valueDate, setValueDate] = useState(new Date().toISOString().slice(0, 10));
   const [direction, setDirection] = useState<'Payment' | 'Receipt'>('Payment');
   const [amount, setAmount] = useState<string>('');
+  const [partyName, setPartyName] = useState('');
   const [narration, setNarration] = useState('');
   const [description, setDescription] = useState('');
   const [referenceNo, setReferenceNo] = useState('');
@@ -96,12 +97,40 @@ export const BankEntryModule: React.FC = () => {
   const [isEntryPanelOpen, setIsEntryPanelOpen] = useState(false);
 
   // --------------------------------------------------------------------------
-  // LIVE PARTY NARRATION AUTO-DETECTION
+  // LIVE PARTY AUTO-DETECTION (From Bank Party Name or Statement Narration)
   // --------------------------------------------------------------------------
   const resolvedPartyInfo = useMemo(() => {
+    const rawBankParty = partyName.trim();
+    if (rawBankParty) {
+      const normParty = normalizeAlias(rawBankParty);
+      // Check in mapped partyAliases
+      const matchedAlias = partyAliases.find(
+        a => (a.alias_normalized === normParty || normalizeAlias(a.alias_name || '') === normParty) && a.status === 'mapped' && a.party_id
+      );
+      if (matchedAlias && matchedAlias.party_id) {
+        const party = parties.find(p => p.id === matchedAlias.party_id);
+        if (party) return { party, matchedBy: 'alias' as const, isUnmappedAlias: false, matchedString: rawBankParty };
+      }
+      // Check in parties directly
+      const directParty = parties.find(p => {
+        if (p.system_name && normalizeAlias(p.system_name) === normParty) return true;
+        if (p.party_name && normalizeAlias(p.party_name) === normParty) return true;
+        if (p.party_name_raw) {
+          const rawArr = Array.isArray(p.party_name_raw) ? p.party_name_raw : [p.party_name_raw];
+          return rawArr.some(r => normalizeAlias(r) === normParty);
+        }
+        return false;
+      });
+      if (directParty) return { party: directParty, matchedBy: 'system_name' as const, isUnmappedAlias: false, matchedString: rawBankParty };
+
+      // Entered, but not yet mapped
+      return { party: null, matchedBy: null, isUnmappedAlias: true, matchedString: rawBankParty };
+    }
+
     if (!narration.trim()) return null;
-    return resolvePartyFromNarration(narration, parties, partyAliases);
-  }, [narration, parties, partyAliases]);
+    const res = resolvePartyFromNarration(narration, parties, partyAliases);
+    return { ...res, isUnmappedAlias: false, matchedString: narration.trim() };
+  }, [partyName, narration, parties, partyAliases]);
 
   // --------------------------------------------------------------------------
   // LIVE DUPLICATE SCANNER (±7 Days Window, Same Account, Same Direction & Amount)
@@ -157,6 +186,7 @@ export const BankEntryModule: React.FC = () => {
     const newTxn = addBankTransaction({
       account_id: selectedAccountId,
       party_id: resolvedPartyInfo?.party?.id,
+      party_name_raw: partyName.trim() || undefined,
       value_date: valueDate,
       narration: narration.trim(),
       description: description.trim() || undefined,
@@ -169,6 +199,7 @@ export const BankEntryModule: React.FC = () => {
     });
 
     setFeedback(`Success: Bank statement line ${newTxn.id} saved as supporting data.`);
+    setPartyName('');
     setNarration('');
     setDescription('');
     setReferenceNo('');
@@ -453,6 +484,24 @@ export const BankEntryModule: React.FC = () => {
               />
             </div>
 
+            {/* Party Name (as per Bank / Counterparty) */}
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1 flex items-center justify-between">
+                <span>Party Name (as per Bank / Counterparty)</span>
+                <span className="text-[10px] font-normal text-slate-400 lowercase">Logged as bank alias</span>
+              </label>
+              <input
+                type="text"
+                value={partyName}
+                onChange={e => setPartyName(e.target.value)}
+                placeholder="e.g. JS DIAMONDS LTD, Bangkok Gems & Stones Co."
+                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-semibold text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              />
+              <span className="text-[10px] text-slate-400 block mt-0.5">
+                Bank-side party names are logged as aliases and mapped to User Side System Names.
+              </span>
+            </div>
+
             {/* Printed Narration & Auto-Detect Party */}
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
@@ -481,6 +530,13 @@ export const BankEntryModule: React.FC = () => {
                     <span className="text-[10px] text-emerald-600">
                       via {resolvedPartyInfo.matchedBy === 'system_name' ? 'System Name' : 'Learned Alias'}
                     </span>
+                  </div>
+                </div>
+              ) : resolvedPartyInfo?.isUnmappedAlias ? (
+                <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded-lg flex items-center space-x-2 text-xs text-amber-800">
+                  <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
+                  <div className="text-[11px]">
+                    <span className="font-bold">New Bank Party:</span> &ldquo;{resolvedPartyInfo.matchedString}&rdquo; will be logged as an unmapped alias in the Party Aliases queue.
                   </div>
                 </div>
               ) : narration.trim().length >= 3 ? (
@@ -824,9 +880,23 @@ export const BankEntryModule: React.FC = () => {
                         </td>
                         <td className="p-3 font-sans">
                           {party ? (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                              {party.system_name}
-                            </span>
+                            <div>
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                {party.system_name}
+                              </span>
+                              {b.party_name_raw && party.system_name && b.party_name_raw.toLowerCase() !== party.system_name.toLowerCase() && (
+                                <div className="text-[9px] text-slate-400 font-mono mt-0.5 truncate max-w-[130px]" title={`Bank Alias: ${b.party_name_raw}`}>
+                                  Alias: {b.party_name_raw}
+                                </div>
+                              )}
+                            </div>
+                          ) : b.party_name_raw ? (
+                            <div className="flex flex-col items-start gap-0.5">
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-850 border border-amber-200 truncate max-w-[130px]" title={`Unmapped Bank Alias: ${b.party_name_raw}`}>
+                                {b.party_name_raw}
+                              </span>
+                              <span className="text-[9px] text-amber-700 italic">Unmapped Alias</span>
+                            </div>
                           ) : (
                             <span className="text-[10px] text-slate-400 italic">Unmapped</span>
                           )}
