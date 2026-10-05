@@ -257,8 +257,9 @@ export const ApprovalsModule: React.FC = () => {
                   <div className="space-y-1">
                     <p><span className="text-slate-400">Party:</span> <strong className="text-slate-900">{party?.system_name || txn.party_name_raw}</strong></p>
                     <p><span className="text-slate-400">Amount:</span> <span className="font-mono font-bold text-slate-900 text-sm tabular-nums">{txn.currency} {txn.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span></p>
-                    <p className="text-[11px] text-emerald-800">
-                      &check; Layer 2 Approved by: <strong>{l2Approver?.full_name || 'Admin'}</strong>
+                    <p className="text-[11px] text-emerald-800 flex items-center">
+                      <CheckCircle className="w-3.5 h-3.5 text-emerald-600 mr-1 shrink-0" />
+                      <span>Layer 2 Approved by: <strong>{l2Approver?.full_name || 'Admin'}</strong></span>
                     </p>
                   </div>
 
