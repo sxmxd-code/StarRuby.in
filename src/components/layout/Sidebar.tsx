@@ -108,7 +108,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       ],
     },
     {
-      title: 'DATA ENTRY (SOURCE OF TRUTH)',
+      title: 'DATA ENTRY',
       items: [
         { id: 'user_entry', label: 'User Transactions', icon: ArrowDownLeft },
         { id: 'bank_entry', label: 'Bank Statement Lines', icon: Landmark },
@@ -120,7 +120,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { id: 'duplicates', label: 'Duplicates Triage', icon: Copy },
         { id: 'aliases', label: 'Party Aliases Queue', icon: Tag, badge: unmappedAliasesCount },
         { id: 'match', label: 'Match & Reconcile', icon: GitMerge, badge: inApprovalCount > 0 ? inApprovalCount : undefined },
-        { id: 'pending_queue', label: 'Pending Queue (Calendar)', icon: Clock, badge: pendingSuggestedCount },
+        { id: 'pending_queue', label: 'Pending Queue', icon: Clock, badge: pendingSuggestedCount },
       ],
     },
     {
