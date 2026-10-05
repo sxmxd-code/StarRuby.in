@@ -331,7 +331,7 @@ export const StatementReconciliationModule: React.FC = () => {
       return (
         <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-50 text-sky-700 border border-sky-200">
           <Clock className="w-3 h-3 text-sky-600 shrink-0" />
-          <span>With Vismay</span>
+          <span>Awaiting Vismay</span>
         </span>
       );
     }
@@ -339,7 +339,7 @@ export const StatementReconciliationModule: React.FC = () => {
       return (
         <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
           <Clock className="w-3 h-3 text-indigo-600 shrink-0" />
-          <span>With Harshil</span>
+          <span>Awaiting Harshil</span>
         </span>
       );
     }

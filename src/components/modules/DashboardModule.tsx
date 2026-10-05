@@ -346,11 +346,11 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({ onNavigate }) 
           <div className="text-[11px] text-slate-500 flex items-center justify-between pt-1 border-t border-slate-100">
             {isCurrentUserHarshil ? (
               <span className="text-amber-800 font-semibold group-hover:underline">
-                Pending Your Sign-off: {myPendingActionCount}
+                Awaiting Your Sign-off: {myPendingActionCount}
               </span>
             ) : isCurrentUserVismay ? (
               <span className="text-amber-800 font-semibold group-hover:underline">
-                Pending Your Sign-off: {myPendingActionCount}
+                Awaiting Your Sign-off: {myPendingActionCount}
               </span>
             ) : (
               <span className="text-slate-600">
@@ -472,13 +472,13 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({ onNavigate }) 
             </div>
           </div>
 
-          {/* Stage 3: With Harshil */}
+          {/* Stage 3: Awaiting Harshil */}
           <div
             onClick={() => onNavigate('match')}
             className="p-3 bg-indigo-50/60 hover:bg-indigo-50 rounded-xl border border-indigo-200/90 transition cursor-pointer flex flex-col justify-between space-y-1.5 shadow-2xs"
           >
             <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold text-indigo-950">With Harshil</span>
+              <span className="text-[11px] font-bold text-indigo-950">Awaiting Harshil</span>
               <Clock className="w-3.5 h-3.5 text-indigo-600" />
             </div>
             <div className="flex items-baseline justify-between">
@@ -487,13 +487,13 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({ onNavigate }) 
             </div>
           </div>
 
-          {/* Stage 4: With Vismay */}
+          {/* Stage 4: Awaiting Vismay */}
           <div
             onClick={() => onNavigate('match')}
             className="p-3 bg-sky-50/60 hover:bg-sky-50 rounded-xl border border-sky-200/90 transition cursor-pointer flex flex-col justify-between space-y-1.5 shadow-2xs"
           >
             <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold text-sky-950">With Vismay</span>
+              <span className="text-[11px] font-bold text-sky-950">Awaiting Vismay</span>
               <Clock className="w-3.5 h-3.5 text-sky-600" />
             </div>
             <div className="flex items-baseline justify-between">
@@ -719,11 +719,11 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({ onNavigate }) 
                           </span>
                         ) : hDone && !vDone ? (
                           <span className="inline-flex items-center space-x-1 text-[9px] font-semibold text-sky-700 bg-sky-50 px-1.5 py-0.2 rounded border border-sky-200">
-                            <span>With Vismay</span>
+                            <span>Awaiting Vismay</span>
                           </span>
                         ) : vDone && !hDone ? (
                           <span className="inline-flex items-center space-x-1 text-[9px] font-semibold text-indigo-700 bg-indigo-50 px-1.5 py-0.2 rounded border border-indigo-200">
-                            <span>With Harshil</span>
+                            <span>Awaiting Harshil</span>
                           </span>
                         ) : txn.status === 'in_approval' ? (
                           <span className="inline-flex items-center space-x-1 text-[9px] font-semibold text-blue-700 bg-blue-50 px-1.5 py-0.2 rounded border border-blue-200">

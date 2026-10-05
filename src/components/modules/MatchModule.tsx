@@ -544,7 +544,7 @@ export const MatchModule: React.FC = () => {
     },
     {
       id: 'pending_harshil',
-      label: 'With Harshil',
+      label: 'Awaiting Harshil',
       sublabel: 'USR1 Sign-off',
       count: activeCounts.pending_harshil,
       icon: Clock,
@@ -554,7 +554,7 @@ export const MatchModule: React.FC = () => {
     },
     {
       id: 'pending_vismay',
-      label: 'With Vismay',
+      label: 'Awaiting Vismay',
       sublabel: 'USR2 Sign-off',
       count: activeCounts.pending_vismay,
       icon: Clock,
@@ -832,12 +832,12 @@ export const MatchModule: React.FC = () => {
                             hDone && !vDone ? (
                               <span className="px-2 py-0.5 rounded font-bold bg-sky-50 text-sky-900 border border-sky-300 text-[9px] inline-flex items-center gap-1">
                                 <Clock className="w-2.5 h-2.5 text-sky-700" />
-                                <span>Pending with Vismay</span>
+                                <span>Awaiting Vismay</span>
                               </span>
                             ) : vDone && !hDone ? (
                               <span className="px-2 py-0.5 rounded font-bold bg-indigo-50 text-indigo-900 border border-indigo-300 text-[9px] inline-flex items-center gap-1">
                                 <Clock className="w-2.5 h-2.5 text-indigo-700" />
-                                <span>Pending with Harshil</span>
+                                <span>Awaiting Harshil</span>
                               </span>
                             ) : (
                               <span className="px-2 py-0.5 rounded font-bold bg-blue-50 text-blue-900 border border-blue-200 text-[9px] inline-flex items-center gap-1">
@@ -1576,12 +1576,12 @@ export const MatchModule: React.FC = () => {
                           ) : bInfo.status === 'pending_harshil' ? (
                             <span className="px-2 py-0.5 rounded font-bold bg-indigo-50 text-indigo-900 border border-indigo-300 text-[9px] inline-flex items-center gap-1">
                               <Clock className="w-2.5 h-2.5 text-indigo-700" />
-                              <span>Pending with Harshil</span>
+                              <span>Awaiting Harshil</span>
                             </span>
                           ) : bInfo.status === 'pending_vismay' ? (
                             <span className="px-2 py-0.5 rounded font-bold bg-sky-50 text-sky-900 border border-sky-300 text-[9px] inline-flex items-center gap-1">
                               <Clock className="w-2.5 h-2.5 text-sky-700" />
-                              <span>Pending with Vismay</span>
+                              <span>Awaiting Vismay</span>
                             </span>
                           ) : (
                             <span className="px-1.5 py-0.5 rounded font-bold uppercase bg-slate-100 text-slate-600 text-[9px]">
