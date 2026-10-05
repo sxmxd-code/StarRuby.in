@@ -24,20 +24,22 @@ import {
   UserCheck,
   FileText,
   HelpCircle,
-  MessageSquare,
   Clock,
   RotateCcw,
   Shield,
   Unlink,
   CheckCheck,
   User,
-  ArrowRight,
+  Search,
+  X,
+  Building,
+  Filter,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { TransactionBoardModal } from './TransactionBoardModal';
 import { BankTransactionBoardModal } from './BankTransactionBoardModal';
 
-type MatchStatusFilter =
+export type MatchStatusFilter =
   | 'open'
   | 'queried'
   | 'unconfirmed'
@@ -80,18 +82,24 @@ export const MatchModule: React.FC = () => {
   const [boardTxn, setBoardTxn] = useState<UserTransaction | null>(null);
   const [bankBoardTxn, setBankBoardTxn] = useState<BankTransaction | null>(null);
 
-  // Filter user transactions that need matching or are in approval
+  // Global status filter (shared across both modes via Executive Pipeline Ribbon)
+  const [statusFilter, setStatusFilter] = useState<MatchStatusFilter>('open');
+
+  // Search queries for both sides
+  const [userSearchQuery, setUserSearchQuery] = useState('');
+  const [bankSearchQuery, setBankSearchQuery] = useState('');
+
+  // Mode 1: User -> Bank state
   const [selectedTxnId, setSelectedTxnId] = useState<string | null>(null);
   const [selectedBankIds, setSelectedBankIds] = useState<Set<string>>(new Set());
   const [verifiedToggle, setVerifiedToggle] = useState<'Yes' | 'No'>('Yes');
   const [closeNote, setCloseNote] = useState('');
   const [adminNote, setAdminNote] = useState('');
   const [feedback, setFeedback] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<MatchStatusFilter>('open');
   const [isQueryInputOpen, setIsQueryInputOpen] = useState(false);
   const [queryInputReason, setQueryInputReason] = useState('');
 
-  // Bank to User state
+  // Mode 2: Bank -> User state
   const [selectedBankTxnId, setSelectedBankTxnId] = useState<string | null>(null);
   const [selectedCandidateUserIds, setSelectedCandidateUserIds] = useState<Set<string>>(new Set());
 
@@ -103,10 +111,54 @@ export const MatchModule: React.FC = () => {
     return (hasHarshilApproved(t.id) && hasVismayApproved(t.id)) || t.status === 'approved';
   };
 
+  // Helper: Map lifecycle status of a Bank Transaction based on its linked User Transaction
+  const getBankTxnLifecycle = (b: BankTransaction) => {
+    const links = txnBankLinks.filter(l => l.bank_txn_id === b.id);
+    const linkedTxns = userTransactions.filter(u => links.some(l => l.user_txn_id === u.id));
+    const primary = linkedTxns[0] || null;
+
+    if (!primary) {
+      return {
+        status: 'open' as MatchStatusFilter,
+        primaryTxn: null,
+        harshilApproved: false,
+        vismayApproved: false,
+        isClosed: false,
+      };
+    }
+
+    const hDone = hasHarshilApproved(primary.id);
+    const vDone = hasVismayApproved(primary.id);
+    const closed = (hDone && vDone) || primary.status === 'approved';
+
+    let status: MatchStatusFilter = 'in_approval';
+    if (closed) {
+      status = 'closed';
+    } else if (primary.status === 'queried') {
+      status = 'queried';
+    } else if (primary.amount_confirmed === 'Unconfirmed') {
+      status = 'unconfirmed';
+    } else if (primary.status === 'in_approval') {
+      if (hDone && !vDone) status = 'pending_vismay';
+      else if (vDone && !hDone) status = 'pending_harshil';
+      else status = 'in_approval';
+    } else if (primary.status === 'open') {
+      status = 'open';
+    }
+
+    return {
+      status,
+      primaryTxn: primary,
+      harshilApproved: hDone,
+      vismayApproved: vDone,
+      isClosed: closed,
+    };
+  };
+
   // --------------------------------------------------------------------------
-  // TAB 1: USER -> BANK MATCHING
+  // 1. COUNTS CALCULATION (FOR EXECUTIVE RIBBON)
   // --------------------------------------------------------------------------
-  const counts = useMemo(() => {
+  const userCounts = useMemo(() => {
     let openCount = 0;
     let queriedCount = 0;
     let unconfirmedCount = 0;
@@ -141,30 +193,85 @@ export const MatchModule: React.FC = () => {
     };
   }, [scopedUserTransactions, approvals, hasHarshilApproved, hasVismayApproved]);
 
+  const bankCounts = useMemo(() => {
+    let openCount = 0;
+    let queriedCount = 0;
+    let unconfirmedCount = 0;
+    let inApprovalCount = 0;
+    let pendingHarshilCount = 0;
+    let pendingVismayCount = 0;
+    let closedCount = 0;
+
+    scopedBankTransactions.forEach(b => {
+      const info = getBankTxnLifecycle(b);
+      if (info.status === 'open') openCount++;
+      if (info.status === 'queried') queriedCount++;
+      if (info.status === 'unconfirmed') unconfirmedCount++;
+      if (info.status === 'in_approval') inApprovalCount++;
+      if (info.status === 'pending_harshil') pendingHarshilCount++;
+      if (info.status === 'pending_vismay') pendingVismayCount++;
+      if (info.status === 'closed') closedCount++;
+    });
+
+    return {
+      open: openCount,
+      queried: queriedCount,
+      unconfirmed: unconfirmedCount,
+      in_approval: inApprovalCount,
+      pending_harshil: pendingHarshilCount,
+      pending_vismay: pendingVismayCount,
+      closed: closedCount,
+      all: scopedBankTransactions.length,
+    };
+  }, [scopedBankTransactions, txnBankLinks, userTransactions, approvals, hasHarshilApproved, hasVismayApproved]);
+
+  // Active counts based on current mode
+  const activeCounts = matchMode === 'user_to_bank' ? userCounts : bankCounts;
+
+  // --------------------------------------------------------------------------
+  // 2. USER -> BANK LIST & SELECTION
+  // --------------------------------------------------------------------------
   const openUserTxns = useMemo(() => {
     return scopedUserTransactions.filter(t => {
       const hAppr = hasHarshilApproved(t.id);
       const vAppr = hasVismayApproved(t.id);
       const bothDone = (hAppr && vAppr) || t.status === 'approved';
 
-      if (statusFilter === 'all') return true;
-      if (statusFilter === 'open') return t.status === 'open';
-      if (statusFilter === 'queried') return t.status === 'queried';
-      if (statusFilter === 'unconfirmed') return t.amount_confirmed === 'Unconfirmed';
-      if (statusFilter === 'in_approval') return t.status === 'in_approval' && !bothDone;
-      if (statusFilter === 'pending_harshil') return t.status === 'in_approval' && vAppr && !hAppr;
-      if (statusFilter === 'pending_vismay') return t.status === 'in_approval' && hAppr && !vAppr;
-      if (statusFilter === 'closed') return bothDone;
+      let matchesFilter = true;
+      if (statusFilter === 'all') matchesFilter = true;
+      else if (statusFilter === 'open') matchesFilter = t.status === 'open';
+      else if (statusFilter === 'queried') matchesFilter = t.status === 'queried';
+      else if (statusFilter === 'unconfirmed') matchesFilter = t.amount_confirmed === 'Unconfirmed';
+      else if (statusFilter === 'in_approval') matchesFilter = t.status === 'in_approval' && !bothDone;
+      else if (statusFilter === 'pending_harshil') matchesFilter = t.status === 'in_approval' && vAppr && !hAppr;
+      else if (statusFilter === 'pending_vismay') matchesFilter = t.status === 'in_approval' && hAppr && !vAppr;
+      else if (statusFilter === 'closed') matchesFilter = bothDone;
+
+      if (!matchesFilter) return false;
+
+      if (userSearchQuery.trim()) {
+        const q = userSearchQuery.toLowerCase();
+        const partyName = (t.party_id ? partiesMap.get(t.party_id)?.system_name : t.party_name_raw) || '';
+        const amtStr = String(t.amount);
+        return (
+          t.id.toLowerCase().includes(q) ||
+          partyName.toLowerCase().includes(q) ||
+          t.party_name_raw.toLowerCase().includes(q) ||
+          amtStr.includes(q) ||
+          (t.description && t.description.toLowerCase().includes(q))
+        );
+      }
+
       return true;
     });
-  }, [scopedUserTransactions, statusFilter, approvals, hasHarshilApproved, hasVismayApproved]);
+  }, [scopedUserTransactions, statusFilter, userSearchQuery, approvals, hasHarshilApproved, hasVismayApproved, partiesMap]);
 
   const selectedTxn = useMemo(() => {
     if (!selectedTxnId) return openUserTxns[0] || null;
     return scopedUserTransactions.find(t => t.id === selectedTxnId) || null;
   }, [selectedTxnId, openUserTxns, scopedUserTransactions]);
 
-  // Candidates for User Transaction (only needed when open or unlinked)
+  // Candidates for User Transaction (only needed when open)
   const candidatesForUser: MatchCandidate[] = useMemo(() => {
     if (!selectedTxn) return [];
     const availableBankTxns = scopedBankTransactions.filter(b => !linkedBankIds.has(b.id));
@@ -189,6 +296,69 @@ export const MatchModule: React.FC = () => {
     return { harshil: harshilAppr, vismay: vismayAppr, layer1: l1 };
   }, [selectedTxn, approvals, isHarshilUser, isVismayUser]);
 
+  // --------------------------------------------------------------------------
+  // 3. BANK -> USER LIST & SELECTION
+  // --------------------------------------------------------------------------
+  const displayBankTxns = useMemo(() => {
+    return scopedBankTransactions.filter(b => {
+      const info = getBankTxnLifecycle(b);
+      let matchesFilter = true;
+
+      if (statusFilter === 'all') matchesFilter = true;
+      else if (statusFilter === 'open') matchesFilter = info.status === 'open';
+      else if (statusFilter === 'queried') matchesFilter = info.status === 'queried';
+      else if (statusFilter === 'unconfirmed') matchesFilter = info.status === 'unconfirmed';
+      else if (statusFilter === 'in_approval') matchesFilter = info.status === 'in_approval';
+      else if (statusFilter === 'pending_harshil') matchesFilter = info.status === 'pending_harshil';
+      else if (statusFilter === 'pending_vismay') matchesFilter = info.status === 'pending_vismay';
+      else if (statusFilter === 'closed') matchesFilter = info.status === 'closed';
+
+      if (!matchesFilter) return false;
+
+      if (bankSearchQuery.trim()) {
+        const q = bankSearchQuery.toLowerCase();
+        const amtStr = String(b.debit > 0 ? b.debit : b.credit);
+        return (
+          b.id.toLowerCase().includes(q) ||
+          b.narration.toLowerCase().includes(q) ||
+          (b.reference_no && b.reference_no.toLowerCase().includes(q)) ||
+          amtStr.includes(q)
+        );
+      }
+
+      return true;
+    });
+  }, [scopedBankTransactions, statusFilter, bankSearchQuery, txnBankLinks, userTransactions, approvals, hasHarshilApproved, hasVismayApproved]);
+
+  const selectedBankTxn = useMemo(() => {
+    if (!selectedBankTxnId) return displayBankTxns[0] || null;
+    return scopedBankTransactions.find(b => b.id === selectedBankTxnId) || null;
+  }, [selectedBankTxnId, displayBankTxns, scopedBankTransactions]);
+
+  const selectedBankLifecycle = useMemo(() => {
+    if (!selectedBankTxn) return null;
+    return getBankTxnLifecycle(selectedBankTxn);
+  }, [selectedBankTxn, txnBankLinks, userTransactions, approvals, hasHarshilApproved, hasVismayApproved]);
+
+  const candidatesForBank: MatchCandidateUser[] = useMemo(() => {
+    if (!selectedBankTxn) return [];
+    const eligibleUserTxns = scopedUserTransactions.filter(t => t.status === 'open');
+    return getMatchCandidatesForBankTxn(selectedBankTxn, eligibleUserTxns, partiesMap, 7, 0.6);
+  }, [selectedBankTxn, scopedUserTransactions, partiesMap]);
+
+  // Approvals info for bank's linked user transaction
+  const selectedBankTxnApprovals = useMemo(() => {
+    if (!selectedBankLifecycle?.primaryTxn) return { harshil: null, vismay: null, layer1: null };
+    const list = approvals.filter(a => a.user_txn_id === selectedBankLifecycle.primaryTxn!.id && a.decision === 'approved');
+    const l1 = list.find(a => a.layer === 1) || null;
+    const harshilAppr = list.find(a => isHarshilUser(a.approver_id)) || null;
+    const vismayAppr = list.find(a => isVismayUser(a.approver_id)) || null;
+    return { harshil: harshilAppr, vismay: vismayAppr, layer1: l1 };
+  }, [selectedBankLifecycle, approvals, isHarshilUser, isVismayUser]);
+
+  // --------------------------------------------------------------------------
+  // 4. ACTION HANDLERS
+  // --------------------------------------------------------------------------
   const toggleBankSelection = (bankId: string) => {
     setSelectedBankIds(prev => {
       const next = new Set(prev);
@@ -198,23 +368,34 @@ export const MatchModule: React.FC = () => {
     });
   };
 
-  const handleRaiseQuery = () => {
-    if (!selectedTxn) return;
+  const toggleCandidateUserSelection = (userId: string) => {
+    setSelectedCandidateUserIds(prev => {
+      const next = new Set(prev);
+      if (next.has(userId)) next.delete(userId);
+      else next.add(userId);
+      return next;
+    });
+  };
+
+  const handleRaiseQuery = (txnId?: string) => {
+    const targetId = txnId || selectedTxn?.id || selectedBankLifecycle?.primaryTxn?.id;
+    if (!targetId) return;
     if (!queryInputReason.trim()) {
-      alert('Please provide a reason or note for the query.');
+      alert('Please provide a reason or question for the query.');
       return;
     }
-    markTransactionAsQueried(selectedTxn.id, queryInputReason.trim());
-    setFeedback(`Transaction ${selectedTxn.id} tagged as QUERY. Recorded in audit delta & comments.`);
+    markTransactionAsQueried(targetId, queryInputReason.trim());
+    setFeedback(`Transaction ${targetId} tagged as QUERY. Audit delta & comment recorded.`);
     setQueryInputReason('');
     setIsQueryInputOpen(false);
     setTimeout(() => setFeedback(null), 4000);
   };
 
-  const handleClearQuery = () => {
-    if (!selectedTxn) return;
-    moveDiscrepancyToOpen(selectedTxn.id, 'Query addressed, re-opened');
-    setFeedback(`Query cleared for ${selectedTxn.id}. Transaction returned to Open.`);
+  const handleClearQuery = (txnId?: string) => {
+    const targetId = txnId || selectedTxn?.id || selectedBankLifecycle?.primaryTxn?.id;
+    if (!targetId) return;
+    moveDiscrepancyToOpen(targetId, 'Query addressed, re-opened');
+    setFeedback(`Query cleared for ${targetId}. Returned to Open.`);
     setTimeout(() => setFeedback(null), 4000);
   };
 
@@ -234,81 +415,6 @@ export const MatchModule: React.FC = () => {
     setCloseNote('');
     confetti({ particleCount: 50, spread: 50, origin: { y: 0.7 } });
     setTimeout(() => setFeedback(null), 4000);
-  };
-
-  const handleAdminApprove = () => {
-    if (!selectedTxn) return;
-    if (currentRole !== 'Admin') {
-      alert('Unauthorized: Dual sign-off is reserved for Co-Founders Harshil Zaveri & Vismay Zaveri.');
-      return;
-    }
-
-    const res = submitAdminApproval(selectedTxn.id, adminNote);
-    if (res.success) {
-      setFeedback(res.message);
-      setAdminNote('');
-      confetti({ particleCount: 75, spread: 60, origin: { y: 0.6 } });
-    } else {
-      alert(res.message);
-    }
-    setTimeout(() => setFeedback(null), 5000);
-  };
-
-  const handleAdminUndo = () => {
-    if (!selectedTxn) return;
-    if (currentRole !== 'Admin') {
-      alert('Unauthorized: Only Administrators can undo sign-off.');
-      return;
-    }
-
-    const res = undoAdminApproval(selectedTxn.id);
-    if (res.success) {
-      setFeedback(res.message);
-    } else {
-      alert(res.message);
-    }
-    setTimeout(() => setFeedback(null), 5000);
-  };
-
-  // --------------------------------------------------------------------------
-  // TAB 2: BANK -> USER MATCHING
-  // --------------------------------------------------------------------------
-  const [bankStatusFilter, setBankStatusFilter] = useState<'unlinked' | 'reconciled' | 'all'>('unlinked');
-
-  const bankCounts = useMemo(() => {
-    return {
-      unlinked: scopedBankTransactions.filter(b => !linkedBankIds.has(b.id)).length,
-      reconciled: scopedBankTransactions.filter(b => linkedBankIds.has(b.id)).length,
-      all: scopedBankTransactions.length,
-    };
-  }, [scopedBankTransactions, linkedBankIds]);
-
-  const displayBankTxns = useMemo(() => {
-    return scopedBankTransactions.filter(b => {
-      if (bankStatusFilter === 'unlinked') return !linkedBankIds.has(b.id);
-      if (bankStatusFilter === 'reconciled') return linkedBankIds.has(b.id);
-      return true;
-    });
-  }, [scopedBankTransactions, linkedBankIds, bankStatusFilter]);
-
-  const selectedBankTxn = useMemo(() => {
-    if (!selectedBankTxnId) return displayBankTxns[0] || null;
-    return scopedBankTransactions.find(b => b.id === selectedBankTxnId) || null;
-  }, [selectedBankTxnId, displayBankTxns, scopedBankTransactions]);
-
-  const candidatesForBank: MatchCandidateUser[] = useMemo(() => {
-    if (!selectedBankTxn) return [];
-    const eligibleUserTxns = scopedUserTransactions.filter(t => t.status === 'open');
-    return getMatchCandidatesForBankTxn(selectedBankTxn, eligibleUserTxns, partiesMap, 7, 0.6);
-  }, [selectedBankTxn, scopedUserTransactions, partiesMap]);
-
-  const toggleCandidateUserSelection = (userId: string) => {
-    setSelectedCandidateUserIds(prev => {
-      const next = new Set(prev);
-      if (next.has(userId)) next.delete(userId);
-      else next.add(userId);
-      return next;
-    });
   };
 
   const handleReconcileFromBankSide = () => {
@@ -331,21 +437,159 @@ export const MatchModule: React.FC = () => {
     setTimeout(() => setFeedback(null), 4000);
   };
 
-  // Current user admin identification
+  const handleAdminApprove = (txnId?: string) => {
+    const targetId = txnId || selectedTxn?.id || selectedBankLifecycle?.primaryTxn?.id;
+    if (!targetId) return;
+    if (currentRole !== 'Admin') {
+      alert('Unauthorized: Sign-off is reserved for Co-Founders Harshil Zaveri & Vismay Zaveri.');
+      return;
+    }
+
+    const res = submitAdminApproval(targetId, adminNote);
+    if (res.success) {
+      setFeedback(res.message);
+      setAdminNote('');
+      confetti({ particleCount: 75, spread: 60, origin: { y: 0.6 } });
+    } else {
+      alert(res.message);
+    }
+    setTimeout(() => setFeedback(null), 5000);
+  };
+
+  const handleAdminUndo = (txnId?: string) => {
+    const targetId = txnId || selectedTxn?.id || selectedBankLifecycle?.primaryTxn?.id;
+    if (!targetId) return;
+    if (currentRole !== 'Admin') {
+      alert('Unauthorized: Only Administrators can undo sign-off.');
+      return;
+    }
+
+    const res = undoAdminApproval(targetId);
+    if (res.success) {
+      setFeedback(res.message);
+    } else {
+      alert(res.message);
+    }
+    setTimeout(() => setFeedback(null), 5000);
+  };
+
+  // Admin user verification flags
   const userIsHarshil = isHarshilUser(currentUser.id);
   const userIsVismay = isVismayUser(currentUser.id);
-  const myApprovalDone = selectedTxn
+
+  // Check if current user has approved selectedTxn
+  const myUserApprovalDone = selectedTxn
     ? (userIsHarshil && hasHarshilApproved(selectedTxn.id)) ||
       (userIsVismay && hasVismayApproved(selectedTxn.id)) ||
       (!userIsHarshil && !userIsVismay && approvals.some(a => a.user_txn_id === selectedTxn.id && a.approver_id === currentUser.id))
     : false;
 
+  // Check if current user has approved selectedBank's primaryTxn
+  const myBankApprovalDone = selectedBankLifecycle?.primaryTxn
+    ? (userIsHarshil && hasHarshilApproved(selectedBankLifecycle.primaryTxn.id)) ||
+      (userIsVismay && hasVismayApproved(selectedBankLifecycle.primaryTxn.id)) ||
+      (!userIsHarshil && !userIsVismay && approvals.some(a => a.user_txn_id === selectedBankLifecycle.primaryTxn!.id && a.approver_id === currentUser.id))
+    : false;
+
+  // Configuration for the 8 Executive Pipeline Ribbon cards
+  const pipelineStages: {
+    id: MatchStatusFilter;
+    label: string;
+    sublabel: string;
+    count: number;
+    icon: React.ComponentType<{ className?: string }>;
+    accentColor: string;
+    activeClass: string;
+    badgeClass: string;
+  }[] = [
+    {
+      id: 'open',
+      label: 'Open Queue',
+      sublabel: matchMode === 'user_to_bank' ? 'Pending Bank / L1' : 'Unlinked Lines',
+      count: activeCounts.open,
+      icon: GitMerge,
+      accentColor: 'text-rose-600',
+      activeClass: 'bg-rose-50 border-rose-500 text-rose-950 ring-2 ring-rose-500/20 shadow-xs',
+      badgeClass: 'bg-rose-100 text-rose-800',
+    },
+    {
+      id: 'queried',
+      label: 'Queried',
+      sublabel: 'Under Review',
+      count: activeCounts.queried,
+      icon: HelpCircle,
+      accentColor: 'text-purple-600',
+      activeClass: 'bg-purple-50 border-purple-500 text-purple-950 ring-2 ring-purple-500/20 shadow-xs',
+      badgeClass: 'bg-purple-100 text-purple-900',
+    },
+    {
+      id: 'unconfirmed',
+      label: 'Unconfirmed',
+      sublabel: 'Amount Flags',
+      count: activeCounts.unconfirmed,
+      icon: AlertCircle,
+      accentColor: 'text-amber-600',
+      activeClass: 'bg-amber-50 border-amber-500 text-amber-950 ring-2 ring-amber-500/20 shadow-xs',
+      badgeClass: 'bg-amber-100 text-amber-900',
+    },
+    {
+      id: 'in_approval',
+      label: 'In Approval',
+      sublabel: 'Layer 1 Closed',
+      count: activeCounts.in_approval,
+      icon: Shield,
+      accentColor: 'text-blue-600',
+      activeClass: 'bg-blue-50 border-blue-500 text-blue-950 ring-2 ring-blue-500/20 shadow-xs',
+      badgeClass: 'bg-blue-100 text-blue-900',
+    },
+    {
+      id: 'pending_harshil',
+      label: 'With Harshil',
+      sublabel: 'USR1 Sign-off',
+      count: activeCounts.pending_harshil,
+      icon: Clock,
+      accentColor: 'text-indigo-600',
+      activeClass: 'bg-indigo-50 border-indigo-500 text-indigo-950 ring-2 ring-indigo-500/20 shadow-xs',
+      badgeClass: 'bg-indigo-100 text-indigo-900',
+    },
+    {
+      id: 'pending_vismay',
+      label: 'With Vismay',
+      sublabel: 'USR2 Sign-off',
+      count: activeCounts.pending_vismay,
+      icon: Clock,
+      accentColor: 'text-sky-600',
+      activeClass: 'bg-sky-50 border-sky-500 text-sky-950 ring-2 ring-sky-500/20 shadow-xs',
+      badgeClass: 'bg-sky-100 text-sky-900',
+    },
+    {
+      id: 'closed',
+      label: 'Closed',
+      sublabel: 'Both Approved',
+      count: activeCounts.closed,
+      icon: CheckCircle2,
+      accentColor: 'text-emerald-600',
+      activeClass: 'bg-emerald-50 border-emerald-500 text-emerald-950 ring-2 ring-emerald-500/20 shadow-xs',
+      badgeClass: 'bg-emerald-100 text-emerald-800',
+    },
+    {
+      id: 'all',
+      label: 'All Records',
+      sublabel: 'Complete Portfolio',
+      count: activeCounts.all,
+      icon: FileText,
+      accentColor: 'text-slate-500',
+      activeClass: 'bg-slate-900 border-slate-900 text-white ring-2 ring-slate-900/20 shadow-xs',
+      badgeClass: 'bg-slate-800 text-slate-100',
+    },
+  ];
+
   return (
-    <div className="space-y-6">
-      {/* Module Title & Mode Switcher */}
-      <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+    <div className="space-y-5">
+      {/* Top Header & Dual Mode Switcher */}
+      <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center space-x-3.5">
-          <span className="p-2.5 bg-emerald-50 text-emerald-700 rounded-xl border border-emerald-100">
+          <span className="p-2.5 bg-emerald-50 text-emerald-700 rounded-xl border border-emerald-100 shadow-2xs">
             <GitMerge className="w-5 h-5" />
           </span>
           <div>
@@ -353,35 +597,36 @@ export const MatchModule: React.FC = () => {
               Match &amp; Reconcile Workbench
             </h1>
             <p className="text-xs text-slate-500">
-              Accountant Layer 1 Reconciliation &bull; Dual Co-Founder Sign-off (Harshil Zaveri &amp; Vismay Zaveri) &bull; Auto-confirms amounts
+              Accountant Layer 1 Reconciliation &bull; Dual Co-Founder Governance (Harshil Zaveri &amp; Vismay Zaveri) &bull; Auto-confirms amounts
             </p>
           </div>
         </div>
 
-        {/* Dual View Tabs */}
-        <div className="flex items-center space-x-1.5 bg-slate-100 p-1.5 rounded-xl text-xs font-semibold">
+        {/* Dual Mode Switcher */}
+        <div className="flex items-center space-x-1.5 bg-slate-100 p-1.5 rounded-xl text-xs font-semibold shrink-0">
           <button
             type="button"
             onClick={() => setMatchMode('user_to_bank')}
-            className={`px-3.5 py-1.5 rounded-lg flex items-center space-x-1.5 transition cursor-pointer ${
+            className={`px-3.5 py-2 rounded-lg flex items-center space-x-1.5 transition cursor-pointer ${
               matchMode === 'user_to_bank'
                 ? 'bg-white text-blue-950 font-bold shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            <UserCheck className="w-3.5 h-3.5" />
+            <UserCheck className="w-4 h-4 text-blue-700" />
             <span>User &rarr; Bank Match</span>
           </button>
+
           <button
             type="button"
             onClick={() => setMatchMode('bank_to_user')}
-            className={`px-3.5 py-1.5 rounded-lg flex items-center space-x-1.5 transition cursor-pointer ${
+            className={`px-3.5 py-2 rounded-lg flex items-center space-x-1.5 transition cursor-pointer ${
               matchMode === 'bank_to_user'
                 ? 'bg-white text-emerald-950 font-bold shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            <Landmark className="w-3.5 h-3.5" />
+            <Landmark className="w-4 h-4 text-emerald-700" />
             <span>Bank &rarr; User Match</span>
           </button>
         </div>
@@ -395,7 +640,67 @@ export const MatchModule: React.FC = () => {
       )}
 
       {/* ==================================================================== */}
-      {/* MODE 1: USER -> BANK MATCHING WORKBENCH */}
+      {/* FULL-WIDTH EXECUTIVE PIPELINE MATRIX (NO HORIZONTAL SCROLL)           */}
+      {/* ==================================================================== */}
+      <div className="bg-white p-4 rounded-2xl border border-slate-200/90 shadow-2xs space-y-2.5">
+        <div className="flex items-center justify-between px-1">
+          <div className="flex items-center space-x-2">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 flex items-center space-x-1">
+              <Filter className="w-3 h-3 text-slate-400" />
+              <span>Lifecycle Governance Pipeline</span>
+            </span>
+            <span className="text-[10px] text-slate-400 font-medium hidden sm:inline">
+              &bull; Click any stage to filter {matchMode === 'user_to_bank' ? 'user transactions' : 'bank statement lines'}
+            </span>
+          </div>
+          <span className="text-[11px] font-mono font-semibold text-slate-600 bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
+            Total {activeCounts.all} {matchMode === 'user_to_bank' ? 'Txns' : 'Bank Lines'}
+          </span>
+        </div>
+
+        {/* 8 Pipeline Stage Cards in Responsive Grid (Zero Horizontal Scroll) */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-8 gap-2.5">
+          {pipelineStages.map(stage => {
+            const Icon = stage.icon;
+            const isActive = statusFilter === stage.id;
+
+            return (
+              <button
+                key={stage.id}
+                type="button"
+                onClick={() => setStatusFilter(stage.id)}
+                className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between space-y-1.5 ${
+                  isActive
+                    ? stage.activeClass
+                    : 'bg-white border-slate-200/90 hover:border-slate-300 hover:bg-slate-50/70 shadow-2xs text-slate-700'
+                }`}
+              >
+                <div className="flex items-center justify-between w-full">
+                  <div className="flex items-center space-x-1.5">
+                    <Icon className={`w-3.5 h-3.5 ${isActive && stage.id === 'all' ? 'text-white' : stage.accentColor}`} />
+                    <span className="text-[11px] font-bold truncate tracking-tight">{stage.label}</span>
+                  </div>
+                  {isActive && (
+                    <span className={`w-1.5 h-1.5 rounded-full ${stage.id === 'all' ? 'bg-white' : 'bg-current'}`} />
+                  )}
+                </div>
+
+                <div className="flex items-baseline justify-between w-full pt-0.5">
+                  <span className={`text-base font-bold font-mono tabular-nums ${isActive && stage.id === 'all' ? 'text-white' : 'text-slate-900'}`}>
+                    {stage.count}
+                  </span>
+                  <span className={`text-[9px] font-medium truncate max-w-[85px] ${isActive && stage.id === 'all' ? 'text-slate-300' : 'text-slate-400'}`}>
+                    {stage.sublabel}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ==================================================================== */}
+      {/* MODE 1: USER -> BANK MATCHING WORKBENCH                               */}
       {/* ==================================================================== */}
       {matchMode === 'user_to_bank' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -408,156 +713,40 @@ export const MatchModule: React.FC = () => {
                     User Transactions ({openUserTxns.length})
                   </h3>
                   <span className="text-[10px] text-slate-500 font-medium">
-                    Filter by lifecycle state &bull; Pick one to inspect or approve
+                    Showing: <strong className="text-slate-700 capitalize">{statusFilter.replace('_', ' ')}</strong> ({openUserTxns.length})
                   </span>
                 </div>
+
+                {statusFilter !== 'all' && (
+                  <button
+                    type="button"
+                    onClick={() => setStatusFilter('all')}
+                    className="text-[10px] text-blue-700 hover:text-blue-900 font-semibold cursor-pointer underline"
+                  >
+                    View All
+                  </button>
+                )}
               </div>
 
-              {/* Status Filter Chips (Exact 8 Statuses - No Wrap Overlap) */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 pt-0.5 text-[11px] font-semibold no-scrollbar">
-                {/* 1. Open */}
-                <button
-                  type="button"
-                  onClick={() => setStatusFilter('open')}
-                  className={`px-2.5 py-1 rounded-lg transition cursor-pointer shrink-0 whitespace-nowrap flex items-center space-x-1.5 ${
-                    statusFilter === 'open'
-                      ? 'bg-rose-700 text-white font-bold shadow-xs'
-                      : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  <span>Open</span>
-                  <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
-                    statusFilter === 'open' ? 'bg-rose-800/80 text-rose-100' : 'bg-slate-100 text-slate-700'
-                  }`}>
-                    {counts.open}
-                  </span>
-                </button>
-
-                {/* 2. Queried */}
-                <button
-                  type="button"
-                  onClick={() => setStatusFilter('queried')}
-                  className={`px-2.5 py-1 rounded-lg transition cursor-pointer shrink-0 whitespace-nowrap flex items-center space-x-1.5 ${
-                    statusFilter === 'queried'
-                      ? 'bg-purple-700 text-white font-bold shadow-xs'
-                      : 'bg-purple-50 text-purple-900 border border-purple-200 hover:bg-purple-100'
-                  }`}
-                >
-                  <span>Queried</span>
-                  <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
-                    statusFilter === 'queried' ? 'bg-purple-800/80 text-purple-100' : 'bg-purple-200/70 text-purple-900'
-                  }`}>
-                    {counts.queried}
-                  </span>
-                </button>
-
-                {/* 3. Unconfirmed */}
-                <button
-                  type="button"
-                  onClick={() => setStatusFilter('unconfirmed')}
-                  className={`px-2.5 py-1 rounded-lg transition cursor-pointer shrink-0 whitespace-nowrap flex items-center space-x-1.5 ${
-                    statusFilter === 'unconfirmed'
-                      ? 'bg-amber-600 text-white font-bold shadow-xs'
-                      : 'bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100'
-                  }`}
-                >
-                  <span>Unconfirmed</span>
-                  <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
-                    statusFilter === 'unconfirmed' ? 'bg-amber-700/80 text-amber-100' : 'bg-amber-200/70 text-amber-900'
-                  }`}>
-                    {counts.unconfirmed}
-                  </span>
-                </button>
-
-                {/* 4. In Approval */}
-                <button
-                  type="button"
-                  onClick={() => setStatusFilter('in_approval')}
-                  className={`px-2.5 py-1 rounded-lg transition cursor-pointer shrink-0 whitespace-nowrap flex items-center space-x-1.5 ${
-                    statusFilter === 'in_approval'
-                      ? 'bg-blue-700 text-white font-bold shadow-xs'
-                      : 'bg-blue-50 text-blue-900 border border-blue-200 hover:bg-blue-100'
-                  }`}
-                >
-                  <span>In Approval</span>
-                  <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
-                    statusFilter === 'in_approval' ? 'bg-blue-800/80 text-blue-100' : 'bg-blue-200/70 text-blue-900'
-                  }`}>
-                    {counts.in_approval}
-                  </span>
-                </button>
-
-                {/* 5. Pending with Harshil */}
-                <button
-                  type="button"
-                  onClick={() => setStatusFilter('pending_harshil')}
-                  className={`px-2.5 py-1 rounded-lg transition cursor-pointer shrink-0 whitespace-nowrap flex items-center space-x-1.5 ${
-                    statusFilter === 'pending_harshil'
-                      ? 'bg-indigo-700 text-white font-bold shadow-xs'
-                      : 'bg-indigo-50 text-indigo-900 border border-indigo-200 hover:bg-indigo-100'
-                  }`}
-                >
-                  <span>Pending with Harshil</span>
-                  <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
-                    statusFilter === 'pending_harshil' ? 'bg-indigo-800/80 text-indigo-100' : 'bg-indigo-200/70 text-indigo-900'
-                  }`}>
-                    {counts.pending_harshil}
-                  </span>
-                </button>
-
-                {/* 6. Pending with Vismay */}
-                <button
-                  type="button"
-                  onClick={() => setStatusFilter('pending_vismay')}
-                  className={`px-2.5 py-1 rounded-lg transition cursor-pointer shrink-0 whitespace-nowrap flex items-center space-x-1.5 ${
-                    statusFilter === 'pending_vismay'
-                      ? 'bg-sky-700 text-white font-bold shadow-xs'
-                      : 'bg-sky-50 text-sky-900 border border-sky-200 hover:bg-sky-100'
-                  }`}
-                >
-                  <span>Pending with Vismay</span>
-                  <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
-                    statusFilter === 'pending_vismay' ? 'bg-sky-800/80 text-sky-100' : 'bg-sky-200/70 text-sky-900'
-                  }`}>
-                    {counts.pending_vismay}
-                  </span>
-                </button>
-
-                {/* 7. Closed */}
-                <button
-                  type="button"
-                  onClick={() => setStatusFilter('closed')}
-                  className={`px-2.5 py-1 rounded-lg transition cursor-pointer shrink-0 whitespace-nowrap flex items-center space-x-1.5 ${
-                    statusFilter === 'closed'
-                      ? 'bg-emerald-700 text-white font-bold shadow-xs'
-                      : 'bg-emerald-50 text-emerald-900 border border-emerald-200 hover:bg-emerald-100'
-                  }`}
-                >
-                  <span>Closed</span>
-                  <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
-                    statusFilter === 'closed' ? 'bg-emerald-800/80 text-emerald-100' : 'bg-emerald-200/70 text-emerald-900'
-                  }`}>
-                    {counts.closed}
-                  </span>
-                </button>
-
-                {/* 8. All */}
-                <button
-                  type="button"
-                  onClick={() => setStatusFilter('all')}
-                  className={`px-2.5 py-1 rounded-lg transition cursor-pointer shrink-0 whitespace-nowrap flex items-center space-x-1.5 ${
-                    statusFilter === 'all'
-                      ? 'bg-slate-900 text-white font-bold shadow-xs'
-                      : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  <span>All</span>
-                  <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
-                    statusFilter === 'all' ? 'bg-slate-800 text-slate-100' : 'bg-slate-100 text-slate-700'
-                  }`}>
-                    {counts.all}
-                  </span>
-                </button>
+              {/* Fast Inline Search Filter */}
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Filter by ID, party, description, amount..."
+                  value={userSearchQuery}
+                  onChange={e => setUserSearchQuery(e.target.value)}
+                  className="w-full bg-white border border-slate-200/90 rounded-lg pl-8 pr-7 py-1.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-rose-600 focus:ring-1 focus:ring-rose-500/20"
+                />
+                {userSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setUserSearchQuery('')}
+                    className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
               </div>
             </div>
 
@@ -565,8 +754,8 @@ export const MatchModule: React.FC = () => {
             <div className="overflow-y-auto divide-y divide-slate-100 flex-1">
               {openUserTxns.length === 0 ? (
                 <div className="p-10 text-center text-slate-400 text-xs space-y-1">
-                  <p className="font-semibold text-slate-600">No transactions in this filter.</p>
-                  <p className="text-[11px] text-slate-400">Try selecting another filter pill above.</p>
+                  <p className="font-semibold text-slate-600">No transactions in this view.</p>
+                  <p className="text-[11px] text-slate-400">Try picking another stage from the pipeline matrix above.</p>
                 </div>
               ) : (
                 openUserTxns.map(t => {
@@ -987,7 +1176,7 @@ export const MatchModule: React.FC = () => {
                         <div className="flex justify-end">
                           <button
                             type="button"
-                            onClick={handleRaiseQuery}
+                            onClick={() => handleRaiseQuery(selectedTxn.id)}
                             className="px-4 py-1.5 bg-purple-700 text-white font-bold text-xs rounded-lg hover:bg-purple-800 transition cursor-pointer shadow-xs"
                           >
                             Confirm &amp; Tag as QUERY
@@ -1135,7 +1324,7 @@ export const MatchModule: React.FC = () => {
                     {/* Admin Action Bar */}
                     {currentRole === 'Admin' ? (
                       <div className="space-y-2.5 pt-2 border-t border-slate-200/80">
-                        {!myApprovalDone ? (
+                        {!myUserApprovalDone ? (
                           <>
                             <input
                               type="text"
@@ -1156,7 +1345,7 @@ export const MatchModule: React.FC = () => {
                               </button>
 
                               <button
-                                onClick={handleAdminApprove}
+                                onClick={() => handleAdminApprove(selectedTxn.id)}
                                 className="px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded-xl shadow-md transition flex items-center space-x-2 cursor-pointer"
                               >
                                 <Check className="w-4 h-4" />
@@ -1179,7 +1368,7 @@ export const MatchModule: React.FC = () => {
 
                             <button
                               type="button"
-                              onClick={handleAdminUndo}
+                              onClick={() => handleAdminUndo(selectedTxn.id)}
                               className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer shadow-2xs"
                               title="Undo your approval and return transaction to pending review"
                             >
@@ -1224,7 +1413,7 @@ export const MatchModule: React.FC = () => {
                       {currentRole === 'Admin' && (
                         <button
                           type="button"
-                          onClick={handleAdminUndo}
+                          onClick={() => handleAdminUndo(selectedTxn.id)}
                           className="px-3 py-1.5 bg-white hover:bg-amber-50 text-amber-800 border border-amber-300 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition cursor-pointer shadow-2xs"
                           title="Undo your approval to re-open for editing or corrections"
                         >
@@ -1252,7 +1441,7 @@ export const MatchModule: React.FC = () => {
 
                       <button
                         type="button"
-                        onClick={handleClearQuery}
+                        onClick={() => handleClearQuery(selectedTxn.id)}
                         className="px-4 py-2 bg-purple-700 hover:bg-purple-800 text-white rounded-xl text-xs font-bold transition cursor-pointer shadow-xs"
                       >
                         Clear Query &amp; Re-Open
@@ -1273,71 +1462,68 @@ export const MatchModule: React.FC = () => {
       )}
 
       {/* ==================================================================== */}
-      {/* MODE 2: BANK -> USER MATCHING WORKBENCH */}
+      {/* MODE 2: BANK -> USER MATCHING WORKBENCH (FULL PARITY WITH DUAL ADMIN) */}
       {/* ==================================================================== */}
       {matchMode === 'bank_to_user' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           {/* LEFT: Bank Statement Lines with Status Filter (5 Cols) */}
           <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden flex flex-col max-h-[820px]">
-            <div className="p-4 border-b border-slate-200 bg-slate-50/80 space-y-2.5">
+            <div className="p-3.5 border-b border-slate-200 bg-slate-50/80 space-y-2.5">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
                     Bank Statement Lines ({displayBankTxns.length})
                   </h3>
-                  <span className="text-[11px] text-slate-500">Pick a bank statement line to find user match</span>
+                  <span className="text-[10px] text-slate-500 font-medium">
+                    Showing: <strong className="text-slate-700 capitalize">{statusFilter.replace('_', ' ')}</strong> ({displayBankTxns.length})
+                  </span>
                 </div>
+
+                {statusFilter !== 'all' && (
+                  <button
+                    type="button"
+                    onClick={() => setStatusFilter('all')}
+                    className="text-[10px] text-emerald-700 hover:text-emerald-900 font-semibold cursor-pointer underline"
+                  >
+                    View All
+                  </button>
+                )}
               </div>
 
-              {/* Status Filter Chips for Bank Transactions */}
-              <div className="flex items-center space-x-1.5 text-xs overflow-x-auto pb-0.5">
-                <button
-                  type="button"
-                  onClick={() => setBankStatusFilter('unlinked')}
-                  className={`px-2.5 py-1 rounded-lg transition cursor-pointer shrink-0 ${
-                    bankStatusFilter === 'unlinked'
-                      ? 'bg-blue-700 text-white font-bold shadow-xs'
-                      : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  Unlinked ({bankCounts.unlinked})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setBankStatusFilter('reconciled')}
-                  className={`px-2.5 py-1 rounded-lg transition cursor-pointer shrink-0 ${
-                    bankStatusFilter === 'reconciled'
-                      ? 'bg-emerald-700 text-white font-bold shadow-xs'
-                      : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  Reconciled / Closed ({bankCounts.reconciled})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setBankStatusFilter('all')}
-                  className={`px-2 py-1 rounded-lg transition cursor-pointer shrink-0 ${
-                    bankStatusFilter === 'all'
-                      ? 'bg-slate-800 text-white font-bold shadow-xs'
-                      : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  All ({bankCounts.all})
-                </button>
+              {/* Fast Inline Search Filter */}
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Filter by Bank ID, narration, UTR, amount..."
+                  value={bankSearchQuery}
+                  onChange={e => setBankSearchQuery(e.target.value)}
+                  className="w-full bg-white border border-slate-200/90 rounded-lg pl-8 pr-7 py-1.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-500/20"
+                />
+                {bankSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setBankSearchQuery('')}
+                    className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
               </div>
             </div>
 
             <div className="overflow-y-auto divide-y divide-slate-100 flex-1">
               {displayBankTxns.length === 0 ? (
-                <div className="p-8 text-center text-slate-400 text-xs">
-                  No bank statement lines matching this filter.
+                <div className="p-10 text-center text-slate-400 text-xs space-y-1">
+                  <p className="font-semibold text-slate-600">No bank lines in this view.</p>
+                  <p className="text-[11px] text-slate-400">Try picking another stage from the pipeline matrix above.</p>
                 </div>
               ) : (
                 displayBankTxns.map(b => {
                   const isSelected = selectedBankTxn?.id === b.id;
                   const bAmount = b.debit > 0 ? b.debit : b.credit;
                   const isDebit = b.debit > 0;
-                  const isLinked = linkedBankIds.has(b.id);
+                  const bInfo = getBankTxnLifecycle(b);
 
                   return (
                     <div
@@ -1348,12 +1534,12 @@ export const MatchModule: React.FC = () => {
                       }}
                       className={`p-4 cursor-pointer transition ${
                         isSelected
-                          ? 'bg-blue-50/90 border-l-4 border-blue-600 shadow-inner'
+                          ? 'bg-emerald-50/90 border-l-4 border-emerald-600 shadow-inner'
                           : 'hover:bg-slate-50'
                       }`}
                     >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="font-bold text-xs text-blue-900 font-mono">{b.id}</span>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="font-bold text-xs text-emerald-950 font-mono tracking-tight">{b.id}</span>
                         <span className="text-[11px] text-slate-500 font-sans">
                           {formatDisplayDate(b.value_date)}
                         </span>
@@ -1365,19 +1551,47 @@ export const MatchModule: React.FC = () => {
 
                       <div className="flex items-center justify-between mt-2 pt-1 border-t border-slate-100/80 text-[10px]">
                         <div className="flex items-center space-x-1.5 flex-wrap">
-                          <span className={`px-1.5 py-0.5 rounded font-bold ${
+                          <span className={`px-1.5 py-0.5 rounded font-bold uppercase text-[9px] ${
                             isDebit ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
                           }`}>
                             {isDebit ? 'Payment (Debit)' : 'Receipt (Credit)'}
                           </span>
 
-                          {isLinked ? (
-                            <span className="px-1.5 py-0.5 rounded font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                              Reconciled
+                          {/* Dynamic Lifecycle & Dual Approval Badge for Bank Entry */}
+                          {bInfo.isClosed ? (
+                            <span className="px-2 py-0.5 rounded font-extrabold uppercase bg-emerald-100 text-emerald-800 border border-emerald-300 text-[9px] tracking-wide inline-flex items-center gap-1">
+                              <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                              <span>Closed (Both Approved)</span>
+                            </span>
+                          ) : bInfo.status === 'queried' ? (
+                            <span className="px-2 py-0.5 rounded font-extrabold uppercase bg-purple-100 text-purple-900 border border-purple-300 text-[9px] tracking-wide animate-pulse inline-flex items-center gap-1">
+                              <HelpCircle className="w-2.5 h-2.5 text-purple-700" />
+                              <span>Query</span>
+                            </span>
+                          ) : bInfo.status === 'in_approval' ? (
+                            <span className="px-2 py-0.5 rounded font-bold bg-blue-50 text-blue-900 border border-blue-200 text-[9px] inline-flex items-center gap-1">
+                              <Clock className="w-2.5 h-2.5 text-blue-700" />
+                              <span>In Approval</span>
+                            </span>
+                          ) : bInfo.status === 'pending_harshil' ? (
+                            <span className="px-2 py-0.5 rounded font-bold bg-indigo-50 text-indigo-900 border border-indigo-300 text-[9px] inline-flex items-center gap-1">
+                              <Clock className="w-2.5 h-2.5 text-indigo-700" />
+                              <span>Pending with Harshil</span>
+                            </span>
+                          ) : bInfo.status === 'pending_vismay' ? (
+                            <span className="px-2 py-0.5 rounded font-bold bg-sky-50 text-sky-900 border border-sky-300 text-[9px] inline-flex items-center gap-1">
+                              <Clock className="w-2.5 h-2.5 text-sky-700" />
+                              <span>Pending with Vismay</span>
                             </span>
                           ) : (
-                            <span className="px-1.5 py-0.5 rounded font-bold bg-slate-100 text-slate-600">
+                            <span className="px-1.5 py-0.5 rounded font-bold uppercase bg-slate-100 text-slate-600 text-[9px]">
                               Unlinked
+                            </span>
+                          )}
+
+                          {bInfo.primaryTxn && (
+                            <span className="text-rose-700 font-semibold font-mono text-[9px] bg-rose-50 px-1.5 py-0.5 rounded border border-rose-100">
+                              {bInfo.primaryTxn.id}
                             </span>
                           )}
                         </div>
@@ -1392,10 +1606,10 @@ export const MatchModule: React.FC = () => {
                               e.stopPropagation();
                               setBankBoardTxn(b);
                             }}
-                            className="px-2 py-0.5 rounded bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-slate-600 font-semibold flex items-center space-x-1 cursor-pointer transition text-[10px]"
+                            className="px-2 py-0.5 rounded bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 text-slate-600 font-semibold flex items-center space-x-1 cursor-pointer transition text-[10px]"
                             title="Open Bank Statement Board"
                           >
-                            <Landmark className="w-3 h-3 text-blue-700" />
+                            <Landmark className="w-3 h-3 text-emerald-700" />
                             <span>Board</span>
                           </button>
                         </div>
@@ -1407,19 +1621,28 @@ export const MatchModule: React.FC = () => {
             </div>
           </div>
 
-          {/* RIGHT: Candidate User Transactions (7 Cols) */}
+          {/* RIGHT: Candidate User Transactions & Dual Admin Workbench (7 Cols) */}
           <div className="lg:col-span-7 bg-white rounded-2xl border border-slate-200 shadow-xs p-6 space-y-6 flex flex-col justify-between">
             {selectedBankTxn ? (
               <>
-                {/* Selected Bank Entry Summary Header */}
-                <div className="p-4 rounded-xl bg-gradient-to-r from-blue-50/80 via-white to-slate-50 border border-blue-200/80 shadow-xs space-y-2 text-slate-900">
+                {/* 1. Selected Bank Entry Summary Header */}
+                <div className="p-4 rounded-xl bg-gradient-to-r from-emerald-50/70 via-white to-slate-50 border border-emerald-200/80 shadow-2xs space-y-2.5 text-slate-900">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center space-x-2">
-                      <span className="font-bold text-blue-800 text-sm font-mono">{selectedBankTxn.id}</span>
+                      <span className="font-bold text-emerald-900 text-sm font-mono tracking-tight">{selectedBankTxn.id}</span>
                       <span className="text-xs text-slate-500">&bull; {formatDisplayDate(selectedBankTxn.value_date)}</span>
+                      {selectedBankTxn.debit > 0 ? (
+                        <span className="px-2 py-0.5 bg-rose-100 text-rose-800 rounded font-bold text-[10px] uppercase">
+                          Debit (Out)
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded font-bold text-[10px] uppercase">
+                          Credit (In)
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center space-x-3">
-                      <span className="text-sm font-mono font-bold text-blue-700 tabular-nums">
+                      <span className="text-base font-mono font-bold text-slate-900 tabular-nums">
                         {formatCurrencyAmount(
                           selectedBankTxn.debit > 0 ? selectedBankTxn.debit : selectedBankTxn.credit,
                           selectedBankTxn.currency
@@ -1428,7 +1651,7 @@ export const MatchModule: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => setBankBoardTxn(selectedBankTxn)}
-                        className="px-2.5 py-1 rounded-lg bg-white hover:bg-blue-50 border border-blue-200 text-blue-800 font-bold text-xs flex items-center space-x-1.5 transition cursor-pointer shadow-2xs"
+                        className="px-2.5 py-1 rounded-lg bg-white hover:bg-emerald-50 border border-emerald-200 text-emerald-800 font-bold text-xs flex items-center space-x-1.5 transition cursor-pointer shadow-2xs"
                         title="Open Bank Statement Board"
                       >
                         <Landmark className="w-3.5 h-3.5" />
@@ -1442,80 +1665,331 @@ export const MatchModule: React.FC = () => {
                     <strong className="text-slate-900 font-mono font-medium">{selectedBankTxn.narration}</strong>
                   </div>
 
-                  {selectedBankTxn.reference_no && (
-                    <div className="text-[11px] text-blue-600 font-mono">
-                      Ref / UTR: {selectedBankTxn.reference_no}
+                  <div className="flex items-center justify-between text-xs pt-0.5">
+                    <div className="text-slate-500 text-[11px]">
+                      Account: <span className="font-semibold text-slate-800 font-mono">{selectedBankTxn.account_id}</span>
                     </div>
-                  )}
+                    {selectedBankTxn.reference_no && (
+                      <div className="text-[11px] text-blue-700 font-mono">
+                        Ref / UTR: {selectedBankTxn.reference_no}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                {/* Candidate User Transactions List or Reconciled Linked Details */}
-                {linkedBankIds.has(selectedBankTxn.id) ? (
+                {/* 2. Middle Section: Candidates (if unlinked) OR Linked User Txn Details */}
+                {selectedBankLifecycle?.primaryTxn ? (
                   <div className="space-y-4 flex-1">
-                    <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-center justify-between">
+                    <div className="p-3.5 bg-blue-50/70 border border-blue-200 rounded-xl text-xs text-blue-900 flex items-center justify-between">
                       <div className="flex items-center space-x-2">
-                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                        <span className="font-semibold">This bank statement line is already reconciled and linked.</span>
+                        <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />
+                        <span className="font-semibold">Reconciled &amp; Linked with User Transaction</span>
                       </div>
-                      <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded border border-emerald-300">
-                        RECONCILED
+                      <span className="text-[10px] font-bold bg-blue-100 text-blue-800 px-2.5 py-0.5 rounded-full border border-blue-200">
+                        LINKED ENTRY
                       </span>
                     </div>
 
-                    <div className="space-y-2">
-                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                        Linked User Transaction(s)
-                      </h4>
-                      {userTransactions
-                        .filter(u => txnBankLinks.some(l => l.bank_txn_id === selectedBankTxn.id && l.user_txn_id === u.id))
-                        .map(u => {
-                          const p = u.party_id ? partiesMap.get(u.party_id) : null;
-                          return (
-                            <div key={u.id} className="p-4 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between text-xs hover:border-slate-300 transition">
-                              <div>
-                                <div className="flex items-center space-x-2">
-                                  <span className="font-bold text-rose-900 font-mono">{u.id}</span>
-                                  <span className="text-slate-500">&bull; {formatDisplayDate(u.date_of_transaction)}</span>
-                                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
-                                    u.status === 'approved' ? 'bg-emerald-100 text-emerald-800' :
-                                    u.status === 'in_approval' ? 'bg-amber-100 text-amber-800' :
-                                    'bg-slate-200 text-slate-700'
-                                  }`}>
-                                    {u.status.replace('_', ' ')}
-                                  </span>
-                                </div>
-                                <div className="font-medium text-slate-900 mt-1">
-                                  {p?.system_name || u.party_name_raw}
-                                </div>
-                              </div>
+                    {/* Linked User Transaction Card */}
+                    <div className="p-4 bg-slate-50/80 border border-slate-200 rounded-xl space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2">
+                          <span className="font-bold text-rose-900 font-mono">{selectedBankLifecycle.primaryTxn.id}</span>
+                          <span className="text-slate-500">&bull; {formatDisplayDate(selectedBankLifecycle.primaryTxn.date_of_transaction)}</span>
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                            selectedBankLifecycle.primaryTxn.status === 'approved' ? 'bg-emerald-100 text-emerald-800' :
+                            selectedBankLifecycle.primaryTxn.status === 'in_approval' ? 'bg-blue-100 text-blue-800' :
+                            'bg-slate-200 text-slate-700'
+                          }`}>
+                            {selectedBankLifecycle.primaryTxn.status.replace('_', ' ')}
+                          </span>
+                        </div>
 
-                              <div className="flex items-center space-x-3">
-                                <span className="font-mono font-bold text-sm text-slate-900 tabular-nums">
-                                  {formatCurrencyAmount(u.amount, u.currency)}
+                        <div className="flex items-center space-x-2">
+                          <span className="font-mono font-bold text-sm text-slate-900 tabular-nums">
+                            {formatCurrencyAmount(selectedBankLifecycle.primaryTxn.amount, selectedBankLifecycle.primaryTxn.currency)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setBoardTxn(selectedBankLifecycle.primaryTxn!)}
+                            className="px-2.5 py-1 rounded bg-white hover:bg-rose-50 hover:text-rose-700 text-slate-700 font-semibold border border-slate-200 flex items-center space-x-1 cursor-pointer transition text-xs shadow-2xs"
+                            title="Open User Transaction Board"
+                          >
+                            <FileText className="w-3.5 h-3.5 text-rose-700" />
+                            <span>Board</span>
+                          </button>
+                          {currentRole !== 'Staff' && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (window.confirm(`Unlink bank line ${selectedBankTxn.id} from transaction ${selectedBankLifecycle.primaryTxn!.id}?`)) {
+                                  unlinkTxnBank(selectedBankLifecycle.primaryTxn!.id, selectedBankTxn.id);
+                                }
+                              }}
+                              className="text-slate-400 hover:text-rose-700 p-1 rounded hover:bg-rose-50 cursor-pointer transition"
+                              title="Unlink this transaction"
+                            >
+                              <Unlink className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="text-xs">
+                        <span className="text-slate-500">Party:</span>{' '}
+                        <strong className="text-slate-900 font-bold">
+                          {partiesMap.get(selectedBankLifecycle.primaryTxn.party_id || '')?.system_name || selectedBankLifecycle.primaryTxn.party_name_raw}
+                        </strong>
+                      </div>
+
+                      {selectedBankLifecycle.primaryTxn.description && (
+                        <p className="text-[11px] text-slate-600 italic">
+                          "{selectedBankLifecycle.primaryTxn.description}"
+                        </p>
+                      )}
+                    </div>
+
+                    {/* DUAL ADMIN SIGN-OFF PANEL (IDENTICAL TO USER->BANK WORKBENCH) */}
+                    {selectedBankLifecycle.status === 'in_approval' || selectedBankLifecycle.status === 'pending_harshil' || selectedBankLifecycle.status === 'pending_vismay' ? (
+                      <div className="p-4 rounded-xl bg-gradient-to-br from-slate-50 via-blue-50/30 to-slate-50 border border-blue-200/80 shadow-xs space-y-4">
+                        <div className="flex items-center justify-between border-b border-blue-100 pb-2">
+                          <div className="flex items-center space-x-2">
+                            <Shield className="w-4 h-4 text-blue-700" />
+                            <h4 className="text-xs font-bold uppercase tracking-wider text-blue-950">
+                              Dual Admin Governance Sign-off
+                            </h4>
+                          </div>
+                          <span className="text-[10px] font-semibold text-blue-700 bg-blue-100/70 px-2 py-0.5 rounded-full">
+                            Both Co-Founders Required
+                          </span>
+                        </div>
+
+                        {/* Dual Cards: Harshil & Vismay */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          {/* Card 1: Harshil */}
+                          <div
+                            className={`p-3 rounded-xl border transition ${
+                              selectedBankTxnApprovals.harshil
+                                ? 'bg-emerald-50/90 border-emerald-300 text-emerald-950 shadow-2xs'
+                                : 'bg-white border-slate-200 text-slate-700'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-1.5">
+                              <span className="font-bold text-xs flex items-center space-x-1.5">
+                                <User className="w-3.5 h-3.5 text-slate-500" />
+                                <span>Harshil Zaveri</span>
+                              </span>
+                              {selectedBankTxnApprovals.harshil ? (
+                                <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-extrabold text-[10px] flex items-center space-x-1">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  <span>Approved</span>
                                 </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200 font-bold text-[10px] flex items-center space-x-1">
+                                  <Clock className="w-3 h-3 text-amber-600" />
+                                  <span>Pending Sign-off</span>
+                                </span>
+                              )}
+                            </div>
+
+                            {selectedBankTxnApprovals.harshil ? (
+                              <div className="space-y-0.5 text-[11px] text-slate-600 pt-1 border-t border-emerald-200/60">
+                                <span className="block font-medium text-slate-700">
+                                  Signed: {formatDisplayDateTime(selectedBankTxnApprovals.harshil.decided_at)}
+                                </span>
+                                {selectedBankTxnApprovals.harshil.comment && (
+                                  <p className="italic text-emerald-900 bg-emerald-100/40 p-1.5 rounded text-[10px]">
+                                    "{selectedBankTxnApprovals.harshil.comment}"
+                                  </p>
+                                )}
+                              </div>
+                            ) : (
+                              <p className="text-[10px] text-slate-500 pt-1 border-t border-slate-100">
+                                Awaiting Harshil's review &amp; confirmation.
+                              </p>
+                            )}
+                          </div>
+
+                          {/* Card 2: Vismay */}
+                          <div
+                            className={`p-3 rounded-xl border transition ${
+                              selectedBankTxnApprovals.vismay
+                                ? 'bg-emerald-50/90 border-emerald-300 text-emerald-950 shadow-2xs'
+                                : 'bg-white border-slate-200 text-slate-700'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-1.5">
+                              <span className="font-bold text-xs flex items-center space-x-1.5">
+                                <User className="w-3.5 h-3.5 text-slate-500" />
+                                <span>Vismay Zaveri</span>
+                              </span>
+                              {selectedBankTxnApprovals.vismay ? (
+                                <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-extrabold text-[10px] flex items-center space-x-1">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  <span>Approved</span>
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200 font-bold text-[10px] flex items-center space-x-1">
+                                  <Clock className="w-3 h-3 text-amber-600" />
+                                  <span>Pending Sign-off</span>
+                                </span>
+                              )}
+                            </div>
+
+                            {selectedBankTxnApprovals.vismay ? (
+                              <div className="space-y-0.5 text-[11px] text-slate-600 pt-1 border-t border-emerald-200/60">
+                                <span className="block font-medium text-slate-700">
+                                  Signed: {formatDisplayDateTime(selectedBankTxnApprovals.vismay.decided_at)}
+                                </span>
+                                {selectedBankTxnApprovals.vismay.comment && (
+                                  <p className="italic text-emerald-900 bg-emerald-100/40 p-1.5 rounded text-[10px]">
+                                    "{selectedBankTxnApprovals.vismay.comment}"
+                                  </p>
+                                )}
+                              </div>
+                            ) : (
+                              <p className="text-[10px] text-slate-500 pt-1 border-t border-slate-100">
+                                Awaiting Vismay's review &amp; confirmation.
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Admin Action Bar */}
+                        {currentRole === 'Admin' ? (
+                          <div className="space-y-2.5 pt-2 border-t border-slate-200/80">
+                            {!myBankApprovalDone ? (
+                              <>
+                                <input
+                                  type="text"
+                                  placeholder={`Optional approval note from ${currentUser.full_name}...`}
+                                  value={adminNote}
+                                  onChange={e => setAdminNote(e.target.value)}
+                                  className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-emerald-600"
+                                />
+
+                                <div className="flex items-center justify-between flex-wrap gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => setIsQueryInputOpen(prev => !prev)}
+                                    className="px-3 py-2 bg-purple-50 text-purple-800 border border-purple-200 hover:bg-purple-100 font-bold text-xs rounded-xl transition flex items-center space-x-1 cursor-pointer"
+                                  >
+                                    <HelpCircle className="w-3.5 h-3.5 text-purple-700" />
+                                    <span>Raise Query / Move to Open</span>
+                                  </button>
+
+                                  <button
+                                    onClick={() => handleAdminApprove(selectedBankLifecycle.primaryTxn!.id)}
+                                    className="px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded-xl shadow-md transition flex items-center space-x-2 cursor-pointer"
+                                  >
+                                    <Check className="w-4 h-4" />
+                                    <span>
+                                      {userIsHarshil
+                                        ? 'Approve as Harshil Zaveri'
+                                        : userIsVismay
+                                        ? 'Approve as Vismay Zaveri'
+                                        : `Approve as Admin (${currentUser.full_name})`}
+                                    </span>
+                                  </button>
+                                </div>
+                              </>
+                            ) : (
+                              <div className="flex items-center justify-between bg-emerald-50 border border-emerald-200 p-3 rounded-xl">
+                                <div className="flex items-center space-x-2 text-xs text-emerald-900 font-semibold">
+                                  <CheckCheck className="w-4 h-4 text-emerald-600" />
+                                  <span>You have approved this transaction. Awaiting co-founder.</span>
+                                </div>
+
                                 <button
                                   type="button"
-                                  onClick={() => setBoardTxn(u)}
-                                  className="px-2.5 py-1 rounded bg-white hover:bg-rose-50 hover:text-rose-700 text-slate-700 font-semibold border border-slate-200 flex items-center space-x-1 cursor-pointer transition text-xs shadow-2xs"
-                                  title="Open User Transaction Board"
+                                  onClick={() => handleAdminUndo(selectedBankLifecycle.primaryTxn!.id)}
+                                  className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer shadow-2xs"
+                                  title="Undo your approval and return transaction to pending review"
                                 >
-                                  <FileText className="w-3.5 h-3.5 text-rose-700" />
-                                  <span>Board</span>
+                                  <RotateCcw className="w-3.5 h-3.5" />
+                                  <span>Undo My Approval</span>
                                 </button>
                               </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center justify-between">
+                            <div className="flex items-center space-x-2">
+                              <Clock className="w-4 h-4 text-amber-700 shrink-0" />
+                              <span>Layer 1 is closed. Awaiting final dual sign-off from Harshil Zaveri &amp; Vismay Zaveri.</span>
                             </div>
-                          );
-                        })}
-                    </div>
+                            <button
+                              type="button"
+                              onClick={() => setIsQueryInputOpen(prev => !prev)}
+                              className="px-2.5 py-1 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 rounded font-semibold text-[11px] cursor-pointer"
+                            >
+                              Raise Query
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ) : selectedBankLifecycle.isClosed ? (
+                      <div className="p-4 rounded-xl bg-gradient-to-r from-emerald-50 via-emerald-100/30 to-emerald-50 border border-emerald-300 shadow-xs space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-2">
+                            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                            <div>
+                              <h4 className="text-xs font-extrabold uppercase tracking-wider text-emerald-950">
+                                Transaction Fully Closed (Approved by Both Co-Founders)
+                              </h4>
+                              <span className="text-[11px] text-emerald-800">
+                                Reconciled, audit-verified, and signed by Harshil Zaveri &amp; Vismay Zaveri.
+                              </span>
+                            </div>
+                          </div>
+
+                          {currentRole === 'Admin' && (
+                            <button
+                              type="button"
+                              onClick={() => handleAdminUndo(selectedBankLifecycle.primaryTxn!.id)}
+                              className="px-3 py-1.5 bg-white hover:bg-amber-50 text-amber-800 border border-amber-300 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition cursor-pointer shadow-2xs"
+                              title="Undo your approval to re-open for editing or corrections"
+                            >
+                              <RotateCcw className="w-3 h-3 text-amber-600" />
+                              <span>Undo Approval (Re-open)</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ) : selectedBankLifecycle.status === 'queried' ? (
+                      <div className="p-4 rounded-xl bg-purple-50 border border-purple-200 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-2">
+                            <HelpCircle className="w-5 h-5 text-purple-700 shrink-0 animate-pulse" />
+                            <div>
+                              <h4 className="text-xs font-extrabold uppercase tracking-wider text-purple-950">
+                                Query Raised on this Transaction
+                              </h4>
+                              <span className="text-[11px] text-purple-800">
+                                Transaction is paused for review. See query comments or clear below.
+                              </span>
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleClearQuery(selectedBankLifecycle.primaryTxn!.id)}
+                            className="px-4 py-2 bg-purple-700 hover:bg-purple-800 text-white rounded-xl text-xs font-bold transition cursor-pointer shadow-xs"
+                          >
+                            Clear Query &amp; Re-Open
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 ) : (
                   <>
-                    {/* Candidate User Transactions List */}
+                    {/* Unlinked: Candidate User Transactions List */}
                     <div className="space-y-3 flex-1 overflow-y-auto max-h-[380px] pr-1">
                       <div className="flex items-center justify-between border-b pb-2">
                         <h3 className="text-xs font-bold uppercase tracking-wider text-emerald-950 flex items-center space-x-1.5">
                           <Sparkles className="w-4 h-4 text-emerald-600" />
-                          <span>User Transaction Candidates (&plusmn; 7 Days, Confidence Ranked)</span>
+                          <span>Matching User Transactions (&plusmn; 7 Days, Confidence Ranked)</span>
                         </h3>
                         <span className="text-[10px] text-slate-500">{candidatesForBank.length} candidate(s)</span>
                       </div>
@@ -1638,13 +2112,13 @@ export const MatchModule: React.FC = () => {
                         {currentRole === 'Staff' ? (
                           <div className="w-full sm:w-auto px-4 py-2 bg-amber-50 border border-amber-200 text-amber-900 rounded-lg text-xs font-semibold flex items-center space-x-2">
                             <ShieldAlert className="w-4 h-4 text-amber-700 shrink-0" />
-                            <span>Staff View-Only: Reconciliation is reserved for Accountant, Manager, or Admin.</span>
+                            <span>Staff View-Only: Reconciliation is reserved for Manager, Accountant, or Admin.</span>
                           </div>
                         ) : (
                           <button
                             onClick={handleReconcileFromBankSide}
                             disabled={selectedCandidateUserIds.size === 0}
-                            className="w-full sm:w-auto px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white font-bold text-xs rounded-lg shadow-md transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                            className="w-full sm:w-auto px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white font-bold text-xs rounded-xl shadow-md transition flex items-center justify-center space-x-1.5 cursor-pointer"
                           >
                             <Check className="w-4 h-4" />
                             <span>
