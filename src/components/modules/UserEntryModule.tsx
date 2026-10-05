@@ -56,6 +56,7 @@ export const UserEntryModule: React.FC = () => {
     deleteUserTransactionsBatch,
     documents,
     attachDocument,
+    deleteDocument,
     addParty,
     activeCompanyId,
     currentUser,
@@ -399,31 +400,84 @@ export const UserEntryModule: React.FC = () => {
   // --------------------------------------------------------------------------
   const [isEditDrawerOpen, setIsEditDrawerOpen] = useState(false);
   const [editingTxn, setEditingTxn] = useState<UserTransaction | null>(null);
+  const [editCompanyId, setEditCompanyId] = useState('');
   const [editAccountId, setEditAccountId] = useState('');
   const [editPartyInput, setEditPartyInput] = useState('');
   const [editPartyId, setEditPartyId] = useState<string | undefined>(undefined);
+  const [isEditPartyDropdownOpen, setIsEditPartyDropdownOpen] = useState(false);
   const [editDate, setEditDate] = useState('');
   const [editAmount, setEditAmount] = useState('');
   const [editAmountConfirmed, setEditAmountConfirmed] = useState<'Confirmed' | 'Unconfirmed'>('Confirmed');
   const [editDirection, setEditDirection] = useState<'Payment' | 'Receipt'>('Payment');
   const [editExchangeRate, setEditExchangeRate] = useState('');
+  const [isEditRateManuallyEdited, setIsEditRateManuallyEdited] = useState(false);
   const [editDescription, setEditDescription] = useState('');
+  const [editAttachmentFile, setEditAttachmentFile] = useState<File | null>(null);
+  const [isEditUploading, setIsEditUploading] = useState(false);
+
+  // Cascading Accounts for Edit Company
+  const editCompanyAccounts = useMemo(() => {
+    return scopedAccounts.filter(a => a.company_id === editCompanyId);
+  }, [scopedAccounts, editCompanyId]);
+
+  const activeEditAccount = accounts.find(a => a.id === editAccountId);
+  const editCurrency = activeEditAccount?.account_currency || editingTxn?.currency || 'INR';
+
+  // Edit party suggestions
+  const editPartySuggestions = useMemo(() => {
+    if (!editPartyInput.trim()) return parties.slice(0, 10);
+    const q = editPartyInput.toLowerCase();
+    return parties.filter(p =>
+      (p.system_name && p.system_name.toLowerCase().includes(q)) ||
+      (p.party_name && p.party_name.toLowerCase().includes(q)) ||
+      (p.cid_number && p.cid_number.toLowerCase().includes(q))
+    ).slice(0, 10);
+  }, [parties, editPartyInput]);
+
+  // Edit estimated INR amount
+  const editAmountInInr = useMemo(() => {
+    const numAmount = parseFloat(editAmount);
+    if (isNaN(numAmount) || numAmount <= 0) return null;
+    if (editCurrency === 'INR') return numAmount;
+    const rate = parseFloat(editExchangeRate);
+    if (!isNaN(rate) && rate > 0) return Number((numAmount * rate).toFixed(2));
+    return null;
+  }, [editAmount, editCurrency, editExchangeRate]);
+
+  // Edit available templates
+  const editAvailableTemplates = useMemo(() => {
+    if (!editPartyId) return [];
+    return partyTemplates.filter(t => t.party_id === editPartyId);
+  }, [partyTemplates, editPartyId]);
+
+  // Documents attached to editingTxn
+  const editingTxnDocs = useMemo(() => {
+    if (!editingTxn) return [];
+    return documents.filter(d => d.user_txn_id === editingTxn.id);
+  }, [documents, editingTxn]);
 
   const openEditTxnDrawer = (txn: UserTransaction) => {
     setEditingTxn(txn);
+    const acc = accounts.find(a => a.id === txn.account_id);
+    const compId = acc?.company_id || allowedCompanies[0]?.id || 'COM1';
+    setEditCompanyId(compId);
     setEditAccountId(txn.account_id);
-    setEditPartyInput(txn.party_name_raw);
+    setEditPartyInput(txn.party_name_raw || '');
     setEditPartyId(txn.party_id);
+    setIsEditPartyDropdownOpen(false);
     setEditDate(txn.date_of_transaction);
     setEditAmount(String(txn.amount));
     setEditAmountConfirmed(txn.amount_confirmed);
     setEditDirection(txn.direction);
     setEditExchangeRate(txn.exchange_rate ? String(txn.exchange_rate) : '');
+    setIsEditRateManuallyEdited(Boolean(txn.exchange_rate));
     setEditDescription(txn.description || '');
+    setEditAttachmentFile(null);
+    setIsEditUploading(false);
     setIsEditDrawerOpen(true);
   };
 
-  const handleUpdateTxn = (e: React.FormEvent) => {
+  const handleUpdateTxn = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingTxn) return;
     const numAmount = parseFloat(editAmount);
@@ -431,13 +485,16 @@ export const UserEntryModule: React.FC = () => {
       alert('Amount must be greater than 0.');
       return;
     }
+    if (!editAccountId) {
+      alert('Please choose a valid bank account.');
+      return;
+    }
+    if (!editPartyInput.trim()) {
+      alert('Party name is required.');
+      return;
+    }
 
-    const editAcc = accounts.find(a => a.id === editAccountId);
-    const editCurr = editAcc?.account_currency || editingTxn.currency;
     const numRate = parseFloat(editExchangeRate);
-    const calcInr = !isNaN(numAmount) && !isNaN(numRate) && numRate > 0
-      ? Number((numAmount * numRate).toFixed(2))
-      : undefined;
 
     updateUserTransaction(editingTxn.id, {
       account_id: editAccountId,
@@ -447,11 +504,33 @@ export const UserEntryModule: React.FC = () => {
       amount: numAmount,
       amount_confirmed: editAmountConfirmed,
       direction: editDirection,
-      currency: editCurr,
+      currency: editCurrency,
       exchange_rate: !isNaN(numRate) && numRate > 0 ? numRate : undefined,
-      amount_in_inr: calcInr,
+      amount_in_inr: editAmountInInr || undefined,
       description: editDescription.trim() || undefined,
     });
+
+    if (editAttachmentFile) {
+      setIsEditUploading(true);
+      try {
+        const fileToUpload = editAttachmentFile;
+        const res = await uploadToR2(fileToUpload, 'documents', editingTxn.id);
+        attachDocument({
+          file_name: fileToUpload.name,
+          r2_bucket: res.bucket,
+          r2_object_key: res.objectKey,
+          content_type: fileToUpload.type || 'application/pdf',
+          size_bytes: res.sizeBytes,
+          doc_type: 'invoice',
+          user_txn_id: editingTxn.id,
+          download_url: res.publicUrl,
+        });
+      } catch (err) {
+        console.error('Edit drawer R2 upload error:', err);
+      } finally {
+        setIsEditUploading(false);
+      }
+    }
 
     setIsEditDrawerOpen(false);
     setFormFeedback(`Transaction ${editingTxn.id} updated successfully.`);
@@ -1524,61 +1603,204 @@ export const UserEntryModule: React.FC = () => {
         isOpen={isEditDrawerOpen}
         onClose={() => setIsEditDrawerOpen(false)}
         title={editingTxn ? `Edit Transaction ${editingTxn.id}` : 'Edit Transaction'}
-        subtitle="Full record CRUD with automated cell-level versioning"
+        subtitle="Identical view & fields to Add Form • Cloudflare R2 attachments • Cell versioning"
         lastIdReference={editingTxn ? `ID: ${editingTxn.id}` : undefined}
         onSubmit={handleUpdateTxn}
-        submitLabel="Update Transaction"
+        submitLabel={isEditUploading ? 'Saving & Uploading...' : 'Update Transaction'}
+        isSubmitting={isEditUploading}
         onDelete={handleDeleteTxn}
         deleteLabel="Delete Transaction"
+        widthClass="max-w-2xl"
       >
         <div className="space-y-4">
+          
+          {/* 1. Company Selection */}
           <div>
             <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-              Bank Account
+              Select Company <span className="text-rose-600">*</span>
             </label>
             <select
-              value={editAccountId}
-              onChange={e => setEditAccountId(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-medium text-slate-900"
+              value={editCompanyId}
+              onChange={e => {
+                const newCompId = e.target.value;
+                setEditCompanyId(newCompId);
+                const nextAcc = accounts.find(a => a.company_id === newCompId);
+                if (nextAcc) setEditAccountId(nextAcc.id);
+              }}
+              className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-medium text-slate-900 focus:outline-none focus:border-rose-600"
             >
-              {accounts.map(acc => (
-                <option key={acc.id} value={acc.id}>
-                  {acc.id} &bull; {acc.bank_name} ({acc.account_currency})
+              {allowedCompanies.map(comp => (
+                <option key={comp.id} value={comp.id}>
+                  {comp.id} &bull; {comp.full_name}
                 </option>
               ))}
             </select>
           </div>
 
+          {/* 2. Cascading Bank Account */}
           <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-              Party / System Name
-            </label>
-            <input
-              type="text"
-              required
-              value={editPartyInput}
-              onChange={e => setEditPartyInput(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs text-slate-900"
-            />
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-bold text-slate-700 uppercase">
+                Select Bank Account <span className="text-rose-600">*</span>
+              </label>
+              <span className="text-[10px] text-slate-500 font-mono">
+                Filtered by {editCompanyId} ({editCompanyAccounts.length} accounts)
+              </span>
+            </div>
+            <select
+              value={editAccountId}
+              onChange={e => setEditAccountId(e.target.value)}
+              className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-medium text-slate-900 focus:outline-none focus:border-rose-600"
+            >
+              {editCompanyAccounts.length === 0 ? (
+                <option value="">No accounts found for this company</option>
+              ) : (
+                editCompanyAccounts.map(acc => (
+                  <option key={acc.id} value={acc.id}>
+                    {acc.id} &bull; {acc.bank_name} ({acc.account_number}) — {acc.account_currency}
+                  </option>
+                ))
+              )}
+            </select>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          {/* 3 & 4. Party Searchable Dropdown + "+ Add Party" Button */}
+          <div className="relative">
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-bold text-slate-700 uppercase">
+                Party / System Name <span className="text-rose-600">*</span>
+              </label>
+              <span className="text-[11px] text-slate-500">
+                Select or register on-the-fly
+              </span>
+            </div>
+
+            <div className="flex items-center space-x-2">
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  value={editPartyInput}
+                  onFocus={() => setIsEditPartyDropdownOpen(true)}
+                  onChange={e => {
+                    setEditPartyInput(e.target.value);
+                    setIsEditPartyDropdownOpen(true);
+                    const match = parties.find(
+                      p => (p.system_name && p.system_name.toLowerCase() === e.target.value.toLowerCase()) ||
+                           p.party_name.toLowerCase() === e.target.value.toLowerCase()
+                    );
+                    setEditPartyId(match?.id);
+                  }}
+                  placeholder="Search party system name or enter raw alias..."
+                  className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-rose-600"
+                />
+                {editPartyInput && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditPartyInput('');
+                      setEditPartyId(undefined);
+                    }}
+                    className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Direct "+ Add Party" Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  setNewPartySystemName(editPartyInput.trim());
+                  setNewPartyCid('');
+                  setNewPartyCountry('India');
+                  setNewPartyGroup('Vendor');
+                  setNewPartyAliasTags(editPartyInput.trim() ? [editPartyInput.trim()] : []);
+                  setCurrentTagInput('');
+                  setIsAddPartyDrawerOpen(true);
+                }}
+                className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition whitespace-nowrap cursor-pointer shrink-0 shadow-xs"
+                title="Register new party immediately"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Party</span>
+              </button>
+            </div>
+
+            {/* Suggestions Dropdown */}
+            {isEditPartyDropdownOpen && editPartySuggestions.length > 0 && (
+              <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl z-30 overflow-hidden max-h-56 overflow-y-auto">
+                <div className="p-2 bg-slate-100/80 text-[10px] font-bold text-slate-500 uppercase flex justify-between items-center border-b">
+                  <span>Parties in Database ({editPartySuggestions.length})</span>
+                  <button
+                    type="button"
+                    onClick={() => setIsEditPartyDropdownOpen(false)}
+                    className="text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    Close
+                  </button>
+                </div>
+                {editPartySuggestions.map(p => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => {
+                      setEditPartyInput(p.system_name || p.party_name);
+                      setEditPartyId(p.id);
+                      setIsEditPartyDropdownOpen(false);
+                    }}
+                    className="w-full text-left px-3 py-2 text-xs hover:bg-rose-50 flex items-center justify-between border-b border-slate-50 cursor-pointer"
+                  >
+                    <div className="flex flex-col">
+                      <span className="font-semibold text-slate-800">{p.system_name || p.party_name}</span>
+                      {p.group_name && <span className="text-[10px] text-slate-500">{p.group_name} &bull; {p.country || 'Global'}</span>}
+                    </div>
+                    <div className="flex items-center space-x-1.5">
+                      <span className="text-[10px] font-mono bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">{p.id}</span>
+                      {p.cid_number && <span className="text-[10px] bg-purple-100 text-purple-800 px-1.5 py-0.5 rounded font-mono font-bold">{p.cid_number}</span>}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {editPartyId && (
+              <div className="mt-1.5 flex items-center space-x-2 text-[11px] text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200">
+                <UserCheck className="w-3.5 h-3.5 text-emerald-600" />
+                <span className="font-semibold">
+                  Mapped Party: {partiesMap.get(editPartyId)?.system_name || partiesMap.get(editPartyId)?.party_name} ({editPartyId})
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* 5, 6, 7. Date, Currency & Amount Row */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                Transaction Date
+                Transaction Date <span className="text-rose-600">*</span>
               </label>
               <input
                 type="date"
                 required
                 value={editDate}
                 onChange={e => setEditDate(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs text-slate-900"
+                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-rose-600"
               />
             </div>
 
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                Amount ({editingTxn?.currency || 'INR'})
+                Currency <span className="text-slate-400 font-normal text-[10px]">(Account)</span>
+              </label>
+              <div className="w-full bg-slate-100 border border-slate-200 rounded-lg px-3 py-2 text-xs font-mono font-bold text-slate-800 select-none">
+                {editCurrency}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                Amount ({editCurrency}) <span className="text-rose-600">*</span>
               </label>
               <input
                 type="number"
@@ -1587,67 +1809,272 @@ export const UserEntryModule: React.FC = () => {
                 required
                 value={editAmount}
                 onChange={e => setEditAmount(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono font-bold text-slate-900"
+                placeholder="0.00"
+                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs text-slate-900 font-mono font-bold tabular-nums focus:outline-none focus:border-rose-600"
               />
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          {/* 8 & 9. Amount Confirmation & Direction Toggles */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                Amount Confirmation
+                Amount Confirmation <span className="text-rose-600">*</span>
               </label>
-              <select
-                value={editAmountConfirmed}
-                onChange={e => setEditAmountConfirmed(e.target.value as any)}
-                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-medium text-slate-900"
-              >
-                <option value="Confirmed">Confirmed</option>
-                <option value="Unconfirmed">Unconfirmed</option>
-              </select>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditAmountConfirmed('Confirmed')}
+                  className={`py-2 text-xs font-bold rounded-lg border transition cursor-pointer ${
+                    editAmountConfirmed === 'Confirmed'
+                      ? 'bg-emerald-700 text-white border-emerald-800 shadow-xs'
+                      : 'bg-slate-50 text-slate-700 border-slate-300 hover:bg-slate-100'
+                  }`}
+                >
+                  Confirmed
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditAmountConfirmed('Unconfirmed')}
+                  className={`py-2 text-xs font-bold rounded-lg border transition cursor-pointer ${
+                    editAmountConfirmed === 'Unconfirmed'
+                      ? 'bg-amber-600 text-white border-amber-700 shadow-xs'
+                      : 'bg-slate-50 text-slate-700 border-slate-300 hover:bg-slate-100'
+                  }`}
+                >
+                  Unconfirmed
+                </button>
+              </div>
             </div>
 
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                Direction
+                Direction <span className="text-rose-600">*</span>
               </label>
-              <select
-                value={editDirection}
-                onChange={e => setEditDirection(e.target.value as any)}
-                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-medium text-slate-900"
-              >
-                <option value="Payment">Payment (Out)</option>
-                <option value="Receipt">Receipt (In)</option>
-              </select>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditDirection('Payment')}
+                  className={`py-2 text-xs font-bold rounded-lg border transition cursor-pointer ${
+                    editDirection === 'Payment'
+                      ? 'bg-rose-700 text-white border-rose-800 shadow-xs'
+                      : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  Payment (Out)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditDirection('Receipt')}
+                  className={`py-2 text-xs font-bold rounded-lg border transition cursor-pointer ${
+                    editDirection === 'Receipt'
+                      ? 'bg-emerald-700 text-white border-emerald-800 shadow-xs'
+                      : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  Receipt (In)
+                </button>
+              </div>
             </div>
           </div>
 
-          {editingTxn?.currency !== 'INR' && (
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                Exchange Rate to INR
-              </label>
-              <input
-                type="number"
-                step="0.0001"
-                value={editExchangeRate}
-                onChange={e => setEditExchangeRate(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono font-bold text-slate-900"
-              />
+          {/* 10. Multi-Currency Exchange Rate & INR Valuation */}
+          {editCurrency !== 'INR' && (
+            <div className="p-3.5 bg-amber-50 rounded-xl border border-amber-200 text-xs space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-amber-900 block">INR Valuation (Live Multi-Currency)</span>
+                <span className="flex items-center gap-1 text-[10px] text-emerald-800 font-mono font-semibold bg-emerald-100/80 px-2 py-0.5 rounded-md border border-emerald-200">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse" />
+                  Live: 1 {editCurrency} = ₹{liveForexRates?.ratesToInr?.[editCurrency] || 26.02}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <div className="flex justify-between items-center mb-0.5">
+                    <span className="text-slate-600 text-[11px] block">Exchange Rate to INR</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsEditRateManuallyEdited(false);
+                        const rate = liveForexRates?.ratesToInr?.[editCurrency];
+                        if (rate) setEditExchangeRate(String(rate));
+                      }}
+                      className="text-[10px] text-rose-700 hover:underline cursor-pointer font-semibold"
+                    >
+                      Reset to Live
+                    </button>
+                  </div>
+                  <input
+                    type="number"
+                    step="0.0001"
+                    value={editExchangeRate}
+                    onChange={e => {
+                      setEditExchangeRate(e.target.value);
+                      setIsEditRateManuallyEdited(true);
+                    }}
+                    placeholder="Exchange rate"
+                    className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold text-slate-900"
+                  />
+                </div>
+                <div>
+                  <span className="text-slate-600 text-[11px] block">Estimated INR Amount</span>
+                  <span className="font-bold font-mono text-emerald-800 text-sm mt-1.5 block tabular-nums">
+                    {editAmountInInr ? `₹ ${editAmountInInr.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '—'}
+                  </span>
+                </div>
+              </div>
             </div>
           )}
 
+          {/* 11. Description & Saved Templates */}
           <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-              Description / Purpose
-            </label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-bold text-slate-700 uppercase">
+                Description / Purpose
+              </label>
+              {editAvailableTemplates.length > 0 && (
+                <span className="text-[11px] text-slate-500 font-normal">
+                  {editAvailableTemplates.length} saved templates for this party
+                </span>
+              )}
+            </div>
+
+            {editAvailableTemplates.length > 0 && (
+              <div className="mb-2">
+                <select
+                  onChange={e => {
+                    if (e.target.value) {
+                      setEditDescription(e.target.value);
+                      const tpl = editAvailableTemplates.find(t => t.template_text === e.target.value);
+                      if (tpl) incrementTemplateUsage(tpl.id);
+                    }
+                  }}
+                  className="w-full bg-rose-50/70 border border-rose-200 rounded-lg px-3 py-1.5 text-xs text-rose-900 focus:outline-none cursor-pointer"
+                >
+                  <option value="">-- Quick Pick Saved Template --</option>
+                  {editAvailableTemplates.map(t => (
+                    <option key={t.id} value={t.template_text}>
+                      {t.template_text} (Used {t.use_count}x)
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <input
               type="text"
               value={editDescription}
               onChange={e => setEditDescription(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs text-slate-900"
+              placeholder="What was this transaction for?"
+              className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-rose-600"
             />
           </div>
+
+          {/* Attach Invoice / Receipt / Voucher & Existing Attachments */}
+          <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="block text-xs font-bold text-slate-700 uppercase flex items-center space-x-1.5">
+                <Paperclip className="w-3.5 h-3.5 text-slate-500" />
+                <span>Attach Invoice / Receipt / Voucher</span>
+              </label>
+              <span className="text-[10px] text-slate-400 font-mono">Cloudflare R2 Direct</span>
+            </div>
+
+            <div className="flex items-center space-x-2">
+              <input
+                type="file"
+                id="editTxnAttachment"
+                onChange={e => setEditAttachmentFile(e.target.files?.[0] || null)}
+                className="hidden"
+                accept=".pdf,.png,.jpg,.jpeg,.csv,.xlsx"
+              />
+              <label
+                htmlFor="editTxnAttachment"
+                className="py-2 px-3 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg text-xs font-medium text-slate-700 cursor-pointer flex items-center space-x-2 transition shadow-2xs"
+              >
+                <Upload className="w-3.5 h-3.5 text-rose-600" />
+                <span className="truncate max-w-[220px]">
+                  {editAttachmentFile ? editAttachmentFile.name : '+ Upload New File (PDF, PNG, JPG)'}
+                </span>
+              </label>
+              {editAttachmentFile && (
+                <button
+                  type="button"
+                  onClick={() => setEditAttachmentFile(null)}
+                  className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg transition cursor-pointer"
+                  title="Remove file"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            {/* List of Existing Attached Documents */}
+            {editingTxnDocs.length > 0 && (
+              <div className="pt-2 border-t border-slate-200 space-y-1.5">
+                <span className="text-[11px] font-bold text-slate-600 block">Existing Attachments ({editingTxnDocs.length}):</span>
+                {editingTxnDocs.map(doc => (
+                  <div key={doc.id} className="flex items-center justify-between p-2 rounded-lg bg-white border border-slate-200 text-xs">
+                    <div className="flex items-center space-x-2 truncate">
+                      <Paperclip className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                      <span className="truncate font-medium text-slate-800">{doc.file_name}</span>
+                    </div>
+                    <div className="flex items-center space-x-2 shrink-0 ml-2">
+                      <a
+                        href={doc.download_url || '#'}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-rose-700 text-[11px] font-semibold hover:underline flex items-center space-x-0.5"
+                      >
+                        <span>View</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (window.confirm(`Delete "${doc.file_name}" permanently from Cloudflare R2?`)) {
+                            await deleteDocument(doc.id);
+                          }
+                        }}
+                        className="text-slate-400 hover:text-rose-600 p-0.5 rounded hover:bg-rose-50 cursor-pointer transition"
+                        title="Delete document"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Status & Bank Verification (Read-Only Display Badges) */}
+          <div className="grid grid-cols-2 gap-3 pt-1">
+            <div>
+              <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">
+                Status <span className="text-[10px] text-slate-400 lowercase font-normal">(current)</span>
+              </label>
+              <div className="px-3 py-2 bg-slate-100 border border-slate-200 rounded-lg text-xs font-semibold flex items-center space-x-1.5 select-none">
+                <span className={`w-2 h-2 rounded-full ${
+                  editingTxn?.status === 'approved' ? 'bg-emerald-500' :
+                  editingTxn?.status === 'in_approval' ? 'bg-amber-500' :
+                  editingTxn?.status === 'queried' ? 'bg-purple-600 animate-pulse' :
+                  'bg-slate-400'
+                }`} />
+                <span className="capitalize">{editingTxn?.status ? editingTxn.status.replace('_', ' ') : 'Open'}</span>
+              </div>
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">
+                Bank Verified? <span className="text-[10px] text-slate-400 lowercase font-normal">(current)</span>
+              </label>
+              <div className="px-3 py-2 bg-slate-100 border border-slate-200 rounded-lg text-xs font-semibold flex items-center space-x-1.5 select-none">
+                <span className={`w-2 h-2 rounded-full ${editingTxn?.verified_with_bank === 'Yes' ? 'bg-emerald-500' : 'bg-slate-400'}`} />
+                <span>{editingTxn?.verified_with_bank || 'No'}</span>
+              </div>
+            </div>
+          </div>
+
         </div>
       </SlideOverDrawer>
 

@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
 import { UserTransaction } from '../../types/database';
-import { CheckCheck, Shield, AlertCircle, CheckCircle, Clock, ArrowRight, UserCheck, ExternalLink, ShieldAlert } from 'lucide-react';
+import { CheckCheck, Shield, AlertCircle, CheckCircle, Clock, ArrowRight, UserCheck, ExternalLink, ShieldAlert, RotateCcw } from 'lucide-react';
 import { formatDisplayDate } from '../../lib/formatters';
 import { TransactionBoardModal } from './TransactionBoardModal';
 import confetti from 'canvas-confetti';
@@ -14,6 +14,7 @@ export const ApprovalsModule: React.FC = () => {
     accounts,
     allUsers,
     submitApproval,
+    undoLayer2Approval,
     moveDiscrepancyToOpen,
     currentUser,
     currentRole,
@@ -64,6 +65,15 @@ export const ApprovalsModule: React.FC = () => {
     const reason = rejectComment[txnId] || 'Moved to Open for review / queries';
     moveDiscrepancyToOpen(txnId, reason);
     setFeedback(`Transaction ${txnId} moved to Open with query recorded.`);
+    setTimeout(() => setFeedback(null), 4000);
+  };
+
+  const handleUndoLayer2 = (txnId: string) => {
+    if (!window.confirm(`Are you sure you want to undo your Layer 2 approval for transaction ${txnId}? It will be returned to the Layer 2 queue.`)) {
+      return;
+    }
+    const res = undoLayer2Approval(txnId);
+    setFeedback(res.message);
     setTimeout(() => setFeedback(null), 4000);
   };
 
@@ -271,27 +281,38 @@ export const ApprovalsModule: React.FC = () => {
 
                     <div className="flex items-center space-x-2">
                       {currentRole === 'Admin' ? (
-                        <>
+                        currentUser.id === l2?.approver_id ? (
                           <button
-                            onClick={() => handleMoveToOpen(txn.id)}
-                            className="px-2.5 py-1 bg-slate-200 text-rose-800 font-semibold rounded hover:bg-rose-100 cursor-pointer"
+                            onClick={() => handleUndoLayer2(txn.id)}
+                            className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded shadow-sm transition flex items-center space-x-1.5 cursor-pointer text-[11px]"
+                            title="Undo your Layer 2 approval and return transaction to Layer 2 queue"
                           >
-                            Move to Open (Query)
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>Undo My Layer 2 Approval</span>
                           </button>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => handleMoveToOpen(txn.id)}
+                              className="px-2.5 py-1 bg-slate-200 text-rose-800 font-semibold rounded hover:bg-rose-100 cursor-pointer text-[11px]"
+                            >
+                              Move to Open (Query)
+                            </button>
 
-                          <button
-                            onClick={() => handleApproveLayer3(txn.id)}
-                            disabled={!isCurrentUserEligible}
-                            className={`px-3 py-1 text-white font-bold rounded shadow-sm transition ${
-                              isCurrentUserEligible
-                                ? 'bg-emerald-700 hover:bg-emerald-800 cursor-pointer'
-                                : 'bg-slate-300 text-slate-500 cursor-not-allowed opacity-80'
-                            }`}
-                            title={!isCurrentUserEligible ? `Must be approved by ${requiredApprover}. (Admin Exclusivity Rule)` : 'Approve & Close'}
-                          >
-                            {isCurrentUserEligible ? 'Final Review & Close' : `Awaiting ${requiredApprover.split(' ')[0]}`}
-                          </button>
-                        </>
+                            <button
+                              onClick={() => handleApproveLayer3(txn.id)}
+                              disabled={!isCurrentUserEligible}
+                              className={`px-3 py-1 text-white font-bold rounded shadow-sm transition text-[11px] ${
+                                isCurrentUserEligible
+                                  ? 'bg-emerald-700 hover:bg-emerald-800 cursor-pointer'
+                                  : 'bg-slate-300 text-slate-500 cursor-not-allowed opacity-80'
+                              }`}
+                              title={!isCurrentUserEligible ? `Must be approved by ${requiredApprover}. (Admin Exclusivity Rule)` : 'Approve & Close'}
+                            >
+                              {isCurrentUserEligible ? 'Final Review & Close' : `Awaiting ${requiredApprover.split(' ')[0]}`}
+                            </button>
+                          </>
+                        )
                       ) : (
                         <span className="text-[11px] text-slate-500 font-semibold bg-slate-100 border border-slate-200 px-2.5 py-1 rounded">
                           Admin Approval Only

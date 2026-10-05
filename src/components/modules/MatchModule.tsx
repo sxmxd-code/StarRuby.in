@@ -32,6 +32,7 @@ export const MatchModule: React.FC = () => {
   const {
     scopedUserTransactions,
     scopedBankTransactions,
+    userTransactions,
     accounts,
     partiesMap,
     txnBankLinks,
@@ -40,6 +41,7 @@ export const MatchModule: React.FC = () => {
     markTransactionAsQueried,
     currentRole,
     activeCompanyId,
+    approvals,
   } = useApp();
 
   // Dual-view mode: 'user_to_bank' or 'bank_to_user'
@@ -66,6 +68,15 @@ export const MatchModule: React.FC = () => {
   // Set of bank transaction IDs already linked
   const linkedBankIds = useMemo(() => new Set(txnBankLinks.map(l => l.bank_txn_id)), [txnBankLinks]);
 
+  // Set of user transaction IDs approved by both Admin 1 and Admin 2 (Layer 3 approved)
+  const closedTxnIds = useMemo(() => {
+    return new Set(
+      approvals
+        .filter(a => a.layer === 3 && a.decision === 'approved')
+        .map(a => a.user_txn_id)
+    );
+  }, [approvals]);
+
   // --------------------------------------------------------------------------
   // TAB 1: USER -> BANK MATCHING
   // --------------------------------------------------------------------------
@@ -76,16 +87,18 @@ export const MatchModule: React.FC = () => {
       queried: scopedUserTransactions.filter(t => t.status === 'queried').length,
       unconfirmed: scopedUserTransactions.filter(t => t.amount_confirmed === 'Unconfirmed').length,
       in_approval: scopedUserTransactions.filter(t => t.status === 'in_approval').length,
+      closed: scopedUserTransactions.filter(t => closedTxnIds.has(t.id)).length,
     };
-  }, [scopedUserTransactions]);
+  }, [scopedUserTransactions, closedTxnIds]);
 
   const openUserTxns = useMemo(() => {
     return scopedUserTransactions.filter(t => {
       if (statusFilter === 'all') return true;
       if (statusFilter === 'unconfirmed') return t.amount_confirmed === 'Unconfirmed';
+      if (statusFilter === 'closed') return closedTxnIds.has(t.id);
       return t.status === statusFilter;
     });
-  }, [scopedUserTransactions, statusFilter]);
+  }, [scopedUserTransactions, statusFilter, closedTxnIds]);
 
   const handleRaiseQuery = () => {
     if (!selectedTxn) return;
@@ -142,14 +155,28 @@ export const MatchModule: React.FC = () => {
   // --------------------------------------------------------------------------
   // TAB 2: BANK -> USER MATCHING
   // --------------------------------------------------------------------------
-  const availableBankTxns = useMemo(() => {
-    return scopedBankTransactions.filter(b => !linkedBankIds.has(b.id));
+  const [bankStatusFilter, setBankStatusFilter] = useState<'unlinked' | 'reconciled' | 'all'>('unlinked');
+
+  const bankCounts = useMemo(() => {
+    return {
+      unlinked: scopedBankTransactions.filter(b => !linkedBankIds.has(b.id)).length,
+      reconciled: scopedBankTransactions.filter(b => linkedBankIds.has(b.id)).length,
+      all: scopedBankTransactions.length,
+    };
   }, [scopedBankTransactions, linkedBankIds]);
 
+  const displayBankTxns = useMemo(() => {
+    return scopedBankTransactions.filter(b => {
+      if (bankStatusFilter === 'unlinked') return !linkedBankIds.has(b.id);
+      if (bankStatusFilter === 'reconciled') return linkedBankIds.has(b.id);
+      return true;
+    });
+  }, [scopedBankTransactions, linkedBankIds, bankStatusFilter]);
+
   const selectedBankTxn = useMemo(() => {
-    if (!selectedBankTxnId) return availableBankTxns[0] || null;
+    if (!selectedBankTxnId) return displayBankTxns[0] || null;
     return scopedBankTransactions.find(b => b.id === selectedBankTxnId) || null;
-  }, [selectedBankTxnId, availableBankTxns, scopedBankTransactions]);
+  }, [selectedBankTxnId, displayBankTxns, scopedBankTransactions]);
 
   const candidatesForBank: MatchCandidateUser[] = useMemo(() => {
     if (!selectedBankTxn) return [];
@@ -308,6 +335,18 @@ export const MatchModule: React.FC = () => {
 
                 <button
                   type="button"
+                  onClick={() => setStatusFilter('closed')}
+                  className={`px-2.5 py-1 rounded-md transition cursor-pointer shrink-0 ${
+                    statusFilter === 'closed'
+                      ? 'bg-emerald-700 text-white font-bold shadow-xs'
+                      : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  Closed ({counts.closed})
+                </button>
+
+                <button
+                  type="button"
                   onClick={() => setStatusFilter('all')}
                   className={`px-2 py-1 rounded-md transition cursor-pointer shrink-0 ${
                     statusFilter === 'all'
@@ -372,7 +411,11 @@ export const MatchModule: React.FC = () => {
                             {t.amount_confirmed}
                           </span>
 
-                          {t.status === 'queried' ? (
+                          {closedTxnIds.has(t.id) ? (
+                            <span className="px-1.5 py-0.2 rounded font-extrabold uppercase bg-emerald-100 text-emerald-800 border border-emerald-300 text-[9px] tracking-wider">
+                              CLOSED (Admin 1 &amp; 2 Approved)
+                            </span>
+                          ) : t.status === 'queried' ? (
                             <span className="px-1.5 py-0.2 rounded font-extrabold uppercase bg-purple-100 text-purple-900 border border-purple-300 text-[9px] tracking-wider animate-pulse">
                               QUERY
                             </span>
@@ -687,28 +730,68 @@ export const MatchModule: React.FC = () => {
       {/* ==================================================================== */}
       {matchMode === 'bank_to_user' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* LEFT: Unreconciled Bank Statement Lines (5 Cols) */}
+          {/* LEFT: Bank Statement Lines with Status Filter (5 Cols) */}
           <div className="lg:col-span-5 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col max-h-[750px]">
-            <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
-              <div>
-                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                  Unlinked Bank Statements ({availableBankTxns.length})
-                </h3>
-                <span className="text-[11px] text-slate-500">Pick a bank statement line to find user match</span>
+            <div className="p-4 border-b border-slate-200 bg-slate-50 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                    Bank Statement Lines ({displayBankTxns.length})
+                  </h3>
+                  <span className="text-[11px] text-slate-500">Pick a bank statement line to find user match</span>
+                </div>
+              </div>
+
+              {/* Status Filter Chips for Bank Transactions */}
+              <div className="flex items-center space-x-1.5 text-xs overflow-x-auto pb-0.5">
+                <button
+                  type="button"
+                  onClick={() => setBankStatusFilter('unlinked')}
+                  className={`px-2.5 py-1 rounded-md transition cursor-pointer shrink-0 ${
+                    bankStatusFilter === 'unlinked'
+                      ? 'bg-blue-700 text-white font-bold shadow-xs'
+                      : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  Unlinked ({bankCounts.unlinked})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBankStatusFilter('reconciled')}
+                  className={`px-2.5 py-1 rounded-md transition cursor-pointer shrink-0 ${
+                    bankStatusFilter === 'reconciled'
+                      ? 'bg-emerald-700 text-white font-bold shadow-xs'
+                      : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  Reconciled / Closed ({bankCounts.reconciled})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBankStatusFilter('all')}
+                  className={`px-2 py-1 rounded-md transition cursor-pointer shrink-0 ${
+                    bankStatusFilter === 'all'
+                      ? 'bg-slate-800 text-white font-bold shadow-xs'
+                      : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  All ({bankCounts.all})
+                </button>
               </div>
             </div>
 
             <div className="overflow-y-auto divide-y divide-slate-100 flex-1">
-              {availableBankTxns.length === 0 ? (
+              {displayBankTxns.length === 0 ? (
                 <div className="p-8 text-center text-slate-400 text-xs">
-                  All bank statement lines have been reconciled!
+                  No bank statement lines matching this filter.
                 </div>
               ) : (
-                availableBankTxns.map(b => {
+                displayBankTxns.map(b => {
                   const isSelected = selectedBankTxn?.id === b.id;
                   const party = b.party_id ? partiesMap.get(b.party_id) : null;
                   const bAmount = b.debit > 0 ? b.debit : b.credit;
                   const isDebit = b.debit > 0;
+                  const isLinked = linkedBankIds.has(b.id);
 
                   return (
                     <div
@@ -735,11 +818,23 @@ export const MatchModule: React.FC = () => {
                       </div>
 
                       <div className="flex items-center justify-between mt-2 pt-1 border-t border-slate-100/80 text-[10px]">
-                        <span className={`px-1.5 py-0.5 rounded font-bold ${
-                          isDebit ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
-                        }`}>
-                          {isDebit ? 'Payment (Debit)' : 'Receipt (Credit)'}
-                        </span>
+                        <div className="flex items-center space-x-1.5 flex-wrap">
+                          <span className={`px-1.5 py-0.5 rounded font-bold ${
+                            isDebit ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
+                          }`}>
+                            {isDebit ? 'Payment (Debit)' : 'Receipt (Credit)'}
+                          </span>
+
+                          {isLinked ? (
+                            <span className="px-1.5 py-0.5 rounded font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                              Reconciled
+                            </span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 rounded font-bold bg-slate-100 text-slate-600">
+                              Unlinked
+                            </span>
+                          )}
+                        </div>
 
                         <div className="flex items-center space-x-2">
                           <span className="font-mono font-bold text-xs text-slate-900 tabular-nums">
@@ -808,153 +903,216 @@ export const MatchModule: React.FC = () => {
                   )}
                 </div>
 
-                {/* Candidate User Transactions List */}
-                <div className="space-y-3 flex-1 overflow-y-auto max-h-[380px] pr-1">
-                  <div className="flex items-center justify-between border-b pb-2">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-emerald-950 flex items-center space-x-1.5">
-                      <Sparkles className="w-4 h-4 text-emerald-600" />
-                      <span>User Transaction Candidates (± 7 Days, Confidence Ranked)</span>
-                    </h3>
-                    <span className="text-[10px] text-slate-500">{candidatesForBank.length} candidate(s)</span>
-                  </div>
-
-                  {candidatesForBank.length === 0 ? (
-                    <div className="text-center py-10 bg-slate-50 rounded-xl border border-dashed text-xs text-slate-400 space-y-2">
-                      <p>No matching user transactions found within ± 7 days.</p>
-                      <p className="text-[11px] text-slate-500">
-                        Enter the transaction in User Entry first, or check the transaction date.
-                      </p>
-                    </div>
-                  ) : (
-                    candidatesForBank.map(c => {
-                      const isChecked = selectedCandidateUserIds.has(c.userTxn.id);
-                      const party = c.userTxn.party_id ? partiesMap.get(c.userTxn.party_id) : null;
-
-                      return (
-                        <div
-                          key={c.userTxn.id}
-                          onClick={() => toggleCandidateUserSelection(c.userTxn.id)}
-                          className={`p-3.5 rounded-xl border cursor-pointer transition text-xs space-y-2 ${
-                            isChecked
-                              ? 'bg-emerald-50/90 border-emerald-500 shadow-sm'
-                              : 'bg-white border-slate-200 hover:border-emerald-300'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center space-x-2">
-                              <input
-                                type="checkbox"
-                                checked={isChecked}
-                                onChange={() => {}}
-                                className="rounded text-emerald-600 focus:ring-emerald-500"
-                              />
-                              <span className="font-bold text-rose-900 font-mono">{c.userTxn.id}</span>
-                              <span className="text-[11px] text-slate-500">
-                                {formatDisplayDate(c.userTxn.date_of_transaction)}
-                              </span>
-                              {c.userTxn.status === 'queried' && (
-                                <span className="px-1.5 py-0.2 rounded font-extrabold uppercase bg-purple-100 text-purple-900 border border-purple-300 text-[9px] tracking-wider animate-pulse">
-                                  QUERY
-                                </span>
-                              )}
-                            </div>
-
-                            <div className="flex items-center space-x-2">
-                              {/* Confidence Badge */}
-                              <span
-                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                  c.confidenceScore >= 80
-                                    ? 'bg-emerald-100 text-emerald-800'
-                                    : c.confidenceScore >= 50
-                                    ? 'bg-amber-100 text-amber-800'
-                                    : 'bg-slate-100 text-slate-700'
-                                }`}
-                              >
-                                {c.confidenceScore}% Confidence
-                              </span>
-
-                              {/* Board button */}
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setBoardTxn(c.userTxn);
-                                }}
-                                className="px-2 py-0.5 rounded bg-slate-100 hover:bg-rose-50 hover:text-rose-700 text-slate-600 font-semibold flex items-center space-x-1 cursor-pointer transition text-[10px]"
-                                title="Open Transaction Board"
-                              >
-                                <FileText className="w-3 h-3 text-rose-700" />
-                                <span>Board</span>
-                              </button>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center justify-between">
-                            <span className="font-semibold text-slate-900 truncate max-w-[280px]">
-                              {party?.system_name || c.userTxn.party_name_raw}
-                            </span>
-                            <span className="font-mono font-bold text-slate-900 tabular-nums">
-                              {formatCurrencyAmount(c.userTxn.amount, c.userTxn.currency)}
-                            </span>
-                          </div>
-
-                          {/* Match Reasons */}
-                          {c.reasons.length > 0 && (
-                            <div className="flex flex-wrap gap-1 text-[10px]">
-                              {c.reasons.map((r, i) => (
-                                <span key={i} className="px-1.5 py-0.5 bg-emerald-100/60 text-emerald-800 rounded">
-                                  {r}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-
-                {/* Close Action Box for Bank Side */}
-                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <div>
-                      <h4 className="text-xs font-bold text-slate-900 uppercase">Execute Bank Reconciliation</h4>
-                      <span className="text-[11px] text-slate-500 block">
-                        {selectedCandidateUserIds.size > 0
-                          ? `Will link Bank Line ${selectedBankTxn.id} to ${selectedCandidateUserIds.size} User Transaction(s) and auto-confirm amounts`
-                          : 'Select at least one matching user transaction above'}
+                {/* Candidate User Transactions List or Reconciled Linked Details */}
+                {linkedBankIds.has(selectedBankTxn.id) ? (
+                  <div className="space-y-4 flex-1">
+                    <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span className="font-semibold">This bank statement line is already reconciled and linked.</span>
+                      </div>
+                      <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded border border-emerald-300">
+                        RECONCILED
                       </span>
                     </div>
+
+                    <div className="space-y-2">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                        Linked User Transaction(s)
+                      </h4>
+                      {userTransactions
+                        .filter(u => txnBankLinks.some(l => l.bank_txn_id === selectedBankTxn.id && l.user_txn_id === u.id))
+                        .map(u => {
+                          const p = u.party_id ? partiesMap.get(u.party_id) : null;
+                          return (
+                            <div key={u.id} className="p-4 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between text-xs hover:border-slate-300 transition">
+                              <div>
+                                <div className="flex items-center space-x-2">
+                                  <span className="font-bold text-rose-900 font-mono">{u.id}</span>
+                                  <span className="text-slate-500">&bull; {formatDisplayDate(u.date_of_transaction)}</span>
+                                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                    u.status === 'approved' ? 'bg-emerald-100 text-emerald-800' :
+                                    u.status === 'in_approval' ? 'bg-amber-100 text-amber-800' :
+                                    'bg-slate-200 text-slate-700'
+                                  }`}>
+                                    {u.status.replace('_', ' ')}
+                                  </span>
+                                </div>
+                                <div className="font-medium text-slate-900 mt-1">
+                                  {p?.system_name || u.party_name_raw}
+                                </div>
+                              </div>
+
+                              <div className="flex items-center space-x-3">
+                                <span className="font-mono font-bold text-sm text-slate-900 tabular-nums">
+                                  {formatCurrencyAmount(u.amount, u.currency)}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setBoardTxn(u)}
+                                  className="px-2.5 py-1 rounded bg-white hover:bg-rose-50 hover:text-rose-700 text-slate-700 font-semibold border border-slate-200 flex items-center space-x-1 cursor-pointer transition text-xs shadow-2xs"
+                                  title="Open User Transaction Board"
+                                >
+                                  <FileText className="w-3.5 h-3.5 text-rose-700" />
+                                  <span>Board</span>
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
                   </div>
-
-                  <input
-                    type="text"
-                    placeholder="Optional reconciliation note..."
-                    value={closeNote}
-                    onChange={e => setCloseNote(e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none"
-                  />
-
-                  <div className="flex items-center justify-end space-x-3 pt-1">
-                    {currentRole === 'Staff' ? (
-                      <div className="w-full sm:w-auto px-4 py-2 bg-amber-50 border border-amber-200 text-amber-900 rounded-lg text-xs font-semibold flex items-center space-x-2">
-                        <ShieldAlert className="w-4 h-4 text-amber-700 shrink-0" />
-                        <span>Staff View-Only: Reconciliation is reserved for Manager, Accountant, or Admin.</span>
+                ) : (
+                  <>
+                    {/* Candidate User Transactions List */}
+                    <div className="space-y-3 flex-1 overflow-y-auto max-h-[380px] pr-1">
+                      <div className="flex items-center justify-between border-b pb-2">
+                        <h3 className="text-xs font-bold uppercase tracking-wider text-emerald-950 flex items-center space-x-1.5">
+                          <Sparkles className="w-4 h-4 text-emerald-600" />
+                          <span>User Transaction Candidates (&plusmn; 7 Days, Confidence Ranked)</span>
+                        </h3>
+                        <span className="text-[10px] text-slate-500">{candidatesForBank.length} candidate(s)</span>
                       </div>
-                    ) : (
-                      <button
-                        onClick={handleReconcileFromBankSide}
-                        disabled={selectedCandidateUserIds.size === 0}
-                        className="w-full sm:w-auto px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white font-bold text-xs rounded-lg shadow-md transition flex items-center justify-center space-x-1.5 cursor-pointer"
-                      >
-                        <Check className="w-4 h-4" />
-                        <span>
-                          Reconcile & Link ({selectedCandidateUserIds.size} User Txn)
-                        </span>
-                      </button>
-                    )}
-                  </div>
-                </div>
+
+                      {candidatesForBank.length === 0 ? (
+                        <div className="text-center py-10 bg-slate-50 rounded-xl border border-dashed text-xs text-slate-400 space-y-2">
+                          <p>No matching user transactions found within &plusmn; 7 days.</p>
+                          <p className="text-[11px] text-slate-500">
+                            Enter the transaction in User Entry first, or check the transaction date.
+                          </p>
+                        </div>
+                      ) : (
+                        candidatesForBank.map(c => {
+                          const isChecked = selectedCandidateUserIds.has(c.userTxn.id);
+                          const party = c.userTxn.party_id ? partiesMap.get(c.userTxn.party_id) : null;
+
+                          return (
+                            <div
+                              key={c.userTxn.id}
+                              onClick={() => toggleCandidateUserSelection(c.userTxn.id)}
+                              className={`p-3.5 rounded-xl border cursor-pointer transition text-xs space-y-2 ${
+                                isChecked
+                                  ? 'bg-emerald-50/90 border-emerald-500 shadow-sm'
+                                  : 'bg-white border-slate-200 hover:border-emerald-300'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center space-x-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={isChecked}
+                                    onChange={() => {}}
+                                    className="rounded text-emerald-600 focus:ring-emerald-500"
+                                  />
+                                  <span className="font-bold text-rose-900 font-mono">{c.userTxn.id}</span>
+                                  <span className="text-[11px] text-slate-500">
+                                    {formatDisplayDate(c.userTxn.date_of_transaction)}
+                                  </span>
+                                  {c.userTxn.status === 'queried' && (
+                                    <span className="px-1.5 py-0.2 rounded font-extrabold uppercase bg-purple-100 text-purple-900 border border-purple-300 text-[9px] tracking-wider animate-pulse">
+                                      QUERY
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center space-x-2">
+                                  {/* Confidence Badge */}
+                                  <span
+                                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                      c.confidenceScore >= 80
+                                        ? 'bg-emerald-100 text-emerald-800'
+                                        : c.confidenceScore >= 50
+                                        ? 'bg-amber-100 text-amber-800'
+                                        : 'bg-slate-100 text-slate-700'
+                                    }`}
+                                  >
+                                    {c.confidenceScore}% Confidence
+                                  </span>
+
+                                  {/* Board button */}
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setBoardTxn(c.userTxn);
+                                    }}
+                                    className="px-2 py-0.5 rounded bg-slate-100 hover:bg-rose-50 hover:text-rose-700 text-slate-600 font-semibold flex items-center space-x-1 cursor-pointer transition text-[10px]"
+                                    title="Open Transaction Board"
+                                  >
+                                    <FileText className="w-3 h-3 text-rose-700" />
+                                    <span>Board</span>
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center justify-between">
+                                <span className="font-semibold text-slate-900 truncate max-w-[280px]">
+                                  {party?.system_name || c.userTxn.party_name_raw}
+                                </span>
+                                <span className="font-mono font-bold text-slate-900 tabular-nums">
+                                  {formatCurrencyAmount(c.userTxn.amount, c.userTxn.currency)}
+                                </span>
+                              </div>
+
+                              {/* Match Reasons */}
+                              {c.reasons.length > 0 && (
+                                <div className="flex flex-wrap gap-1 text-[10px]">
+                                  {c.reasons.map((r, i) => (
+                                    <span key={i} className="px-1.5 py-0.5 bg-emerald-100/60 text-emerald-800 rounded">
+                                      {r}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+
+                    {/* Close Action Box for Bank Side */}
+                    <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div>
+                          <h4 className="text-xs font-bold text-slate-900 uppercase">Execute Bank Reconciliation</h4>
+                          <span className="text-[11px] text-slate-500 block">
+                            {selectedCandidateUserIds.size > 0
+                              ? `Will link Bank Line ${selectedBankTxn.id} to ${selectedCandidateUserIds.size} User Transaction(s) and auto-confirm amounts`
+                              : 'Select at least one matching user transaction above'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <input
+                        type="text"
+                        placeholder="Optional reconciliation note..."
+                        value={closeNote}
+                        onChange={e => setCloseNote(e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none"
+                      />
+
+                      <div className="flex items-center justify-end space-x-3 pt-1">
+                        {currentRole === 'Staff' ? (
+                          <div className="w-full sm:w-auto px-4 py-2 bg-amber-50 border border-amber-200 text-amber-900 rounded-lg text-xs font-semibold flex items-center space-x-2">
+                            <ShieldAlert className="w-4 h-4 text-amber-700 shrink-0" />
+                            <span>Staff View-Only: Reconciliation is reserved for Manager, Accountant, or Admin.</span>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={handleReconcileFromBankSide}
+                            disabled={selectedCandidateUserIds.size === 0}
+                            className="w-full sm:w-auto px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white font-bold text-xs rounded-lg shadow-md transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                          >
+                            <Check className="w-4 h-4" />
+                            <span>
+                              Reconcile &amp; Link ({selectedCandidateUserIds.size} User Txn)
+                            </span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
               </>
             ) : (
               <div className="text-center py-20 text-slate-400 text-xs">

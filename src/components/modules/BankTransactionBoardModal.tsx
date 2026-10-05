@@ -23,6 +23,7 @@ import {
   Hash,
   ArrowRight,
   ShieldAlert,
+  Trash2,
 } from 'lucide-react';
 
 interface BankTransactionBoardModalProps {
@@ -52,6 +53,7 @@ export const BankTransactionBoardModal: React.FC<BankTransactionBoardModalProps>
     restoreCellVersion,
     updateBankTransaction,
     updateBankTransactionCell,
+    deleteBankTransaction,
   } = useApp();
 
   // Dual Body & Main Scroll Lock
@@ -160,6 +162,23 @@ export const BankTransactionBoardModal: React.FC<BankTransactionBoardModalProps>
     }
   };
 
+  const handleDeleteTransaction = () => {
+    if (currentRole !== 'Admin') {
+      alert('Unauthorized: Only Administrators have permission to delete statement lines.');
+      return;
+    }
+    const reason = window.prompt(`Are you sure you want to permanently delete bank statement line ${currentBankTxn.id}? Please enter deletion reason:`);
+    if (reason === null) return;
+    if (!reason.trim()) {
+      alert('Deletion cancelled: A reason is required for the audit record.');
+      return;
+    }
+    const ok = deleteBankTransaction(currentBankTxn.id, reason.trim());
+    if (ok) {
+      onClose();
+    }
+  };
+
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-6 overflow-hidden">
       {/* Crisp Solid Scrim Backdrop (No blur) */}
@@ -207,13 +226,25 @@ export const BankTransactionBoardModal: React.FC<BankTransactionBoardModalProps>
             </div>
           </div>
 
-          <button
-            onClick={onClose}
-            className="text-slate-400 hover:text-slate-700 p-1.5 rounded-xl hover:bg-slate-100 transition cursor-pointer shrink-0"
-            title="Close Board (Esc)"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center space-x-1 shrink-0">
+            {currentRole === 'Admin' && (
+              <button
+                type="button"
+                onClick={handleDeleteTransaction}
+                className="text-slate-400 hover:text-rose-600 p-1.5 rounded-xl hover:bg-rose-50 transition cursor-pointer"
+                title="Delete Statement Line (Admin)"
+              >
+                <Trash2 className="w-5 h-5" />
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="text-slate-400 hover:text-slate-700 p-1.5 rounded-xl hover:bg-slate-100 transition cursor-pointer"
+              title="Close Board (Esc)"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Content Body */}

@@ -136,6 +136,7 @@ interface AppContextType {
   moveDiscrepancyToOpen: (userTxnId: string, comment?: string) => void;
   markTransactionAsQueried: (userTxnId: string, queryReason: string) => void;
   submitApproval: (userTxnId: string, layer: 1 | 2 | 3, decision: 'approved' | 'rejected', comment?: string) => { success: boolean; message: string };
+  undoLayer2Approval: (userTxnId: string) => { success: boolean; message: string };
   
   // Duplicates Triage Persistence
   dismissedDuplicatePairs: Set<string>;
@@ -1277,7 +1278,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const existing = userTransactions.find(t => t.id === id);
     if (!existing) return false;
 
-    // Purge versions and comments for this deleted transaction so old history doesn't collide
+    // Purge versions, comments, approvals, and bank links for this deleted transaction so old history doesn't collide
     const updatedVersions = recordVersions.filter(v => !(v.table_name === 'transactions_user' && v.record_id === id));
     setRecordVersions(updatedVersions);
     save('recordVersions', updatedVersions);
@@ -1285,6 +1286,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updatedComments = comments.filter(c => c.user_txn_id !== id);
     setComments(updatedComments);
     save('comments', updatedComments);
+
+    const updatedApprovals = approvals.filter(a => a.user_txn_id !== id);
+    setApprovals(updatedApprovals);
+    save('approvals', updatedApprovals);
+
+    const updatedLinks = txnBankLinks.filter(l => l.user_txn_id !== id);
+    setTxnBankLinks(updatedLinks);
+    save('txnBankLinks', updatedLinks);
 
     const updatedTxns = userTransactions.filter(t => t.id !== id);
     setUserTransactions(updatedTxns);
@@ -1294,8 +1303,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       supabase.from('transactions_user').delete().eq('id', id).then(() => {});
       supabase.from('record_versions').delete().eq('table_name', 'transactions_user').eq('record_id', id).then(() => {});
       supabase.from('comments').delete().eq('user_txn_id', id).then(() => {});
+      supabase.from('approvals').delete().eq('user_txn_id', id).then(() => {});
+      supabase.from('txn_bank_links').delete().eq('user_txn_id', id).then(() => {});
     }
 
+    notifyRealtime(`User transaction ${id} deleted by ${currentUser.full_name}: ${reason || 'Manual delete'}`);
     return true;
   };
 
@@ -1673,14 +1685,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const deleteBankTransaction = (id: string, _reason: string): boolean => {
+  const deleteBankTransaction = (id: string, reason: string): boolean => {
     const existing = bankTransactions.find(t => t.id === id);
     if (!existing) return false;
 
-    // Purge versions for this deleted bank transaction so old history doesn't collide
+    // Purge versions and links for this deleted bank transaction so old history doesn't collide
     const updatedVersions = recordVersions.filter(v => !(v.table_name === 'transactions_bank' && v.record_id === id));
     setRecordVersions(updatedVersions);
     save('recordVersions', updatedVersions);
+
+    const updatedLinks = txnBankLinks.filter(l => l.bank_txn_id !== id);
+    setTxnBankLinks(updatedLinks);
+    save('txnBankLinks', updatedLinks);
 
     const updated = bankTransactions.filter(t => t.id !== id);
     setBankTransactions(updated);
@@ -1689,8 +1705,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (supabase) {
       supabase.from('transactions_bank').delete().eq('id', id).then(() => {});
       supabase.from('record_versions').delete().eq('table_name', 'transactions_bank').eq('record_id', id).then(() => {});
+      supabase.from('txn_bank_links').delete().eq('bank_txn_id', id).then(() => {});
     }
 
+    notifyRealtime(`Bank transaction ${id} deleted by ${currentUser.full_name}: ${reason || 'Manual delete'}`);
     return true;
   };
 
@@ -1947,7 +1965,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       comment: comment || 'Moved to Open for review',
       decided_at: new Date().toISOString(),
     };
-    const updatedApprovals = [...approvals.filter(a => !(a.user_txn_id === userTxnId && a.layer === 1)), resetApproval];
+    // Purge ALL existing approvals for this txn (Layer 1, Layer 2, Layer 3) and record rejection at Layer 1
+    const updatedApprovals = [...approvals.filter(a => a.user_txn_id !== userTxnId), resetApproval];
     setApprovals(updatedApprovals);
     save('approvals', updatedApprovals);
 
@@ -1956,12 +1975,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       status: 'open' as const,
       updated_at: new Date().toISOString(),
     };
+    const deltas = createCellAuditDelta('transactions_user', userTxnId, txn, updatedTxn, currentUser.id, recordVersions);
+    if (deltas.length > 0) {
+      const updatedV = [...deltas, ...recordVersions];
+      setRecordVersions(updatedV);
+      save('recordVersions', updatedV);
+      if (supabase) {
+        supabase.from('record_versions').insert(deltas).then(() => {});
+      }
+    }
+
     const updatedTxns = userTransactions.map(t => (t.id === userTxnId ? updatedTxn : t));
     setUserTransactions(updatedTxns);
     save('userTransactions', updatedTxns);
 
     if (supabase) {
-      supabase.from('approvals').upsert([resetApproval], { onConflict: 'user_txn_id, layer' }).then(() => {});
+      supabase.from('approvals').delete().eq('user_txn_id', userTxnId).then(() => {
+        supabase?.from('approvals').upsert([resetApproval], { onConflict: 'user_txn_id, layer' }).then(() => {});
+      });
       supabase.from('transactions_user').update({
         status: 'open',
         updated_at: updatedTxn.updated_at,
@@ -1971,6 +2002,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (comment) {
       addComment(userTxnId, `[Moved to Open]: ${comment}`);
     }
+    notifyRealtime(`Transaction ${userTxnId} moved back to Open by ${currentUser.full_name}.`);
   };
 
   const markTransactionAsQueried = (userTxnId: string, queryReason: string) => {
@@ -2259,6 +2291,70 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     return { success: false, message: 'Invalid approval layer specified.' };
+  };
+
+  // Operational Action 7a: Undo Layer 2 Approval (Admin Exclusivity & Correction)
+  const undoLayer2Approval = (userTxnId: string): { success: boolean; message: string } => {
+    const txn = userTransactions.find(t => t.id === userTxnId);
+    if (!txn) return { success: false, message: 'Transaction not found.' };
+
+    if (currentRole !== 'Admin') {
+      return { success: false, message: 'Unauthorized: Only Administrators can undo Layer 2 approval.' };
+    }
+
+    const layer2 = approvals.find(a => a.user_txn_id === userTxnId && a.layer === 2 && a.decision === 'approved');
+    if (!layer2) {
+      return { success: false, message: 'No active Layer 2 approval found to undo.' };
+    }
+
+    const layer3 = approvals.find(a => a.user_txn_id === userTxnId && a.layer === 3 && a.decision === 'approved');
+    if (layer3) {
+      return { success: false, message: 'Cannot undo Layer 2 approval: Transaction is already closed at Layer 3.' };
+    }
+
+    // Per Admin Exclusivity: The Admin who gave Layer 2 can undo their approval
+    if (layer2.approver_id !== currentUser.id) {
+      const approverName = users.find(u => u.id === layer2.approver_id)?.full_name || layer2.approver_id;
+      return { success: false, message: `Only ${approverName} can undo their own Layer 2 approval.` };
+    }
+
+    // Remove layer 2 approval
+    const updatedApprovals = approvals.filter(a => !(a.user_txn_id === userTxnId && a.layer === 2));
+    setApprovals(updatedApprovals);
+    save('approvals', updatedApprovals);
+
+    // Revert status to 'in_approval' (preserving Layer 1)
+    const updatedTxn = {
+      ...txn,
+      status: 'in_approval' as const,
+      updated_at: new Date().toISOString(),
+    };
+    const deltas = createCellAuditDelta('transactions_user', userTxnId, txn, updatedTxn, currentUser.id, recordVersions);
+    if (deltas.length > 0) {
+      const updatedVersions = [...deltas, ...recordVersions];
+      setRecordVersions(updatedVersions);
+      save('recordVersions', updatedVersions);
+      if (supabase) {
+        supabase.from('record_versions').insert(deltas).then(() => {});
+      }
+    }
+
+    const updatedTxns = userTransactions.map(t => (t.id === userTxnId ? updatedTxn : t));
+    setUserTransactions(updatedTxns);
+    save('userTransactions', updatedTxns);
+
+    if (supabase) {
+      supabase.from('approvals').delete().eq('user_txn_id', userTxnId).eq('layer', 2).then(() => {});
+      supabase.from('transactions_user').update({
+        status: 'in_approval',
+        updated_at: updatedTxn.updated_at,
+      }).eq('id', userTxnId).then(() => {});
+    }
+
+    addComment(userTxnId, `[Layer 2 Approval Undone by ${currentUser.full_name}]: Transaction returned to Layer 2 queue.`);
+    notifyRealtime(`Layer 2 approval undone for ${userTxnId} by ${currentUser.full_name}.`);
+
+    return { success: true, message: 'Layer 2 approval undone. Transaction returned to Layer 2 queue.' };
   };
 
   // Operational Action 7b: Company CRUD
@@ -4025,6 +4121,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         moveDiscrepancyToOpen,
         markTransactionAsQueried,
         submitApproval,
+        undoLayer2Approval,
         dismissedDuplicatePairs,
         dismissDuplicatePair,
         undismissDuplicatePair,

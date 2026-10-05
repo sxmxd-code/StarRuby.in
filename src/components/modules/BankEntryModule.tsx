@@ -22,10 +22,12 @@ import {
   ChevronUp,
   ChevronDown,
   Plus,
+  Edit2,
 } from 'lucide-react';
 import { UniversalImportModal } from './UniversalImportModal';
 import { BankTransactionBoardModal } from './BankTransactionBoardModal';
 import { SearchablePartySelect } from '../common/SearchablePartySelect';
+import { SlideOverDrawer } from '../common/SlideOverDrawer';
 import { BankTransaction } from '../../types/database';
 
 export const BankEntryModule: React.FC = () => {
@@ -39,6 +41,8 @@ export const BankEntryModule: React.FC = () => {
     bankTransactions,
     scopedBankTransactions,
     addBankTransaction,
+    updateBankTransaction,
+    deleteBankTransaction,
     deleteBankTransactionsBatch,
     activeCompanyId,
   } = useApp();
@@ -95,6 +99,131 @@ export const BankEntryModule: React.FC = () => {
   const [showImportModal, setShowImportModal] = useState(false);
   const [selectedBankTxnForBoard, setSelectedBankTxnForBoard] = useState<BankTransaction | null>(null);
   const [isEntryPanelOpen, setIsEntryPanelOpen] = useState(false);
+
+  // --------------------------------------------------------------------------
+  // EDIT STATEMENT ENTRY STATE (Full Record CRUD with Same View as Add)
+  // --------------------------------------------------------------------------
+  const [isEditDrawerOpen, setIsEditDrawerOpen] = useState(false);
+  const [editingBankTxn, setEditingBankTxn] = useState<BankTransaction | null>(null);
+  const [editCompanyId, setEditCompanyId] = useState('');
+  const [editAccountId, setEditAccountId] = useState('');
+  const [editDirection, setEditDirection] = useState<'Payment' | 'Receipt'>('Payment');
+  const [editAmount, setEditAmount] = useState('');
+  const [editValueDate, setEditValueDate] = useState('');
+  const [editPartyName, setEditPartyName] = useState('');
+  const [editNarration, setEditNarration] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editReferenceNo, setEditReferenceNo] = useState('');
+  const [editBalanceAfter, setEditBalanceAfter] = useState('');
+
+  const editCompanyAccounts = useMemo(() => {
+    return scopedAccounts.filter(a => a.company_id === editCompanyId);
+  }, [scopedAccounts, editCompanyId]);
+
+  const activeEditAccount = accounts.find(a => a.id === editAccountId);
+  const editCurrency = activeEditAccount?.account_currency || editingBankTxn?.currency || 'INR';
+
+  const editResolvedPartyInfo = useMemo(() => {
+    const rawBankParty = editPartyName.trim();
+    if (rawBankParty) {
+      const normParty = normalizeAlias(rawBankParty);
+      const matchedAlias = partyAliases.find(
+        a => (a.alias_normalized === normParty || normalizeAlias(a.alias_name || '') === normParty) && a.status === 'mapped' && a.party_id
+      );
+      if (matchedAlias && matchedAlias.party_id) {
+        const party = parties.find(p => p.id === matchedAlias.party_id);
+        if (party) return { party, matchedBy: 'alias' as const, isUnmappedAlias: false, matchedString: rawBankParty };
+      }
+      const directParty = parties.find(p => {
+        if (p.system_name && normalizeAlias(p.system_name) === normParty) return true;
+        if (p.party_name && normalizeAlias(p.party_name) === normParty) return true;
+        if (p.party_name_raw) {
+          const rawArr = Array.isArray(p.party_name_raw) ? p.party_name_raw : [p.party_name_raw];
+          return rawArr.some(r => normalizeAlias(r) === normParty);
+        }
+        return false;
+      });
+      if (directParty) return { party: directParty, matchedBy: 'system_name' as const, isUnmappedAlias: false, matchedString: rawBankParty };
+      return { party: null, matchedBy: null, isUnmappedAlias: true, matchedString: rawBankParty };
+    }
+
+    if (!editNarration.trim()) return null;
+    const res = resolvePartyFromNarration(editNarration, parties, partyAliases);
+    return { ...res, isUnmappedAlias: false, matchedString: editNarration.trim() };
+  }, [editPartyName, editNarration, parties, partyAliases]);
+
+  const openEditDrawer = (txn: BankTransaction) => {
+    setEditingBankTxn(txn);
+    const acc = accounts.find(a => a.id === txn.account_id);
+    const compId = acc?.company_id || allowedCompanies[0]?.id || 'COM1';
+    setEditCompanyId(compId);
+    setEditAccountId(txn.account_id);
+    const isPayment = txn.debit > 0;
+    setEditDirection(isPayment ? 'Payment' : 'Receipt');
+    const amt = isPayment ? txn.debit : txn.credit;
+    setEditAmount(String(amt));
+    setEditValueDate(txn.value_date);
+    setEditPartyName(txn.party_name_raw || '');
+    setEditNarration(txn.narration || '');
+    setEditDescription(txn.description || '');
+    setEditReferenceNo(txn.reference_no || '');
+    setEditBalanceAfter(txn.balance_after !== undefined && txn.balance_after !== null ? String(txn.balance_after) : '');
+    setIsEditDrawerOpen(true);
+  };
+
+  const handleUpdateBankTxn = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingBankTxn) return;
+    const numAmount = parseFloat(editAmount) || 0;
+    if (numAmount <= 0) {
+      alert('Please enter a valid amount greater than 0.');
+      return;
+    }
+    if (!editNarration.trim()) {
+      alert('Statement narration printed by bank is required.');
+      return;
+    }
+    if (!editAccountId) {
+      alert('Please select a valid bank account.');
+      return;
+    }
+
+    const debit = editDirection === 'Payment' ? numAmount : 0;
+    const credit = editDirection === 'Receipt' ? numAmount : 0;
+
+    updateBankTransaction(editingBankTxn.id, {
+      account_id: editAccountId,
+      party_id: editResolvedPartyInfo?.party?.id,
+      party_name_raw: editPartyName.trim() || undefined,
+      value_date: editValueDate,
+      narration: editNarration.trim(),
+      description: editDescription.trim() || undefined,
+      reference_no: editReferenceNo.trim() || undefined,
+      debit,
+      credit,
+      currency: editCurrency,
+      balance_after: editBalanceAfter ? parseFloat(editBalanceAfter) : undefined,
+    });
+
+    setIsEditDrawerOpen(false);
+    setFeedback(`Bank statement entry ${editingBankTxn.id} updated successfully.`);
+    setTimeout(() => setFeedback(null), 4000);
+  };
+
+  const handleDeleteBankTxn = () => {
+    if (!editingBankTxn) return;
+    const reason = window.prompt(`Please provide a reason for deleting bank entry ${editingBankTxn.id}:`);
+    if (reason === null) return;
+    if (!reason.trim()) {
+      alert('Deletion cancelled: A reason is required for the audit trail.');
+      return;
+    }
+
+    deleteBankTransaction(editingBankTxn.id, reason.trim());
+    setIsEditDrawerOpen(false);
+    setFeedback(`Bank entry ${editingBankTxn.id} deleted. Audit trail logged.`);
+    setTimeout(() => setFeedback(null), 4000);
+  };
 
   // --------------------------------------------------------------------------
   // LIVE PARTY AUTO-DETECTION (From Bank Party Name or Statement Narration)
@@ -913,6 +1042,15 @@ export const BankEntryModule: React.FC = () => {
                         <td className="p-3 text-right whitespace-nowrap">
                           <button
                             type="button"
+                            onClick={() => openEditDrawer(b)}
+                            className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-[11px] font-bold inline-flex items-center space-x-1 cursor-pointer transition shadow-2xs mr-1.5"
+                            title="Edit Bank Statement Entry"
+                          >
+                            <Edit2 className="w-3 h-3 text-slate-500" />
+                            <span>Edit</span>
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => setSelectedBankTxnForBoard(b)}
                             className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 rounded-lg text-[11px] font-bold inline-flex items-center space-x-1 cursor-pointer transition shadow-2xs"
                             title="Open Bank Statement Board & Version History"
@@ -951,6 +1089,239 @@ export const BankEntryModule: React.FC = () => {
           onClose={() => setSelectedBankTxnForBoard(null)}
         />
       )}
+
+      {/* ==================================================================== */}
+      {/* EDIT BANK STATEMENT ENTRY SLIDE-OVER DRAWER (SAME VIEW AS ADD FORM)  */}
+      {/* ==================================================================== */}
+      <SlideOverDrawer
+        isOpen={isEditDrawerOpen}
+        onClose={() => setIsEditDrawerOpen(false)}
+        title={editingBankTxn ? `Edit Statement Line ${editingBankTxn.id}` : 'Edit Statement Line'}
+        subtitle="Identical view & fields to Add Statement Line form • Cell-level versioning"
+        lastIdReference={editingBankTxn ? `ID: ${editingBankTxn.id}` : undefined}
+        onSubmit={handleUpdateBankTxn}
+        submitLabel="Update Statement Line"
+        onDelete={handleDeleteBankTxn}
+        deleteLabel="Delete Statement Line"
+        widthClass="max-w-2xl"
+      >
+        <div className="space-y-4">
+          {/* Operating Entity / Company */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase mb-1 flex items-center space-x-1">
+              <Building2 className="w-3.5 h-3.5 text-slate-400" />
+              <span>Operating Entity / Company</span>
+            </label>
+            <select
+              value={editCompanyId}
+              onChange={e => {
+                const newCompId = e.target.value;
+                setEditCompanyId(newCompId);
+                const nextAcc = accounts.find(a => a.company_id === newCompId);
+                if (nextAcc) setEditAccountId(nextAcc.id);
+              }}
+              className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none cursor-pointer"
+            >
+              {allowedCompanies.map(c => (
+                <option key={c.id} value={c.id}>
+                  {c.id} &bull; {c.full_name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Cascading Bank Account */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase mb-1 flex items-center space-x-1">
+              <CreditCard className="w-3.5 h-3.5 text-slate-400" />
+              <span>Bank Account</span>
+            </label>
+            <select
+              value={editAccountId}
+              onChange={e => setEditAccountId(e.target.value)}
+              className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none cursor-pointer"
+            >
+              {editCompanyAccounts.length === 0 ? (
+                <option value="">No accounts available for selected company</option>
+              ) : (
+                editCompanyAccounts.map(acc => (
+                  <option key={acc.id} value={acc.id}>
+                    {acc.id} &bull; {acc.bank_name} ({acc.account_currency}) &bull; {acc.account_number}
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
+
+          {/* Direction Toggle: Payment (Debit) vs Receipt (Credit) */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5">
+              Transaction Direction
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setEditDirection('Payment')}
+                className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center space-x-2 border transition cursor-pointer ${
+                  editDirection === 'Payment'
+                    ? 'bg-rose-50 border-rose-300 text-rose-700 shadow-sm'
+                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <ArrowDownLeft className="w-4 h-4 text-rose-600" />
+                <span>Payment (Debit)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setEditDirection('Receipt')}
+                className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center space-x-2 border transition cursor-pointer ${
+                  editDirection === 'Receipt'
+                    ? 'bg-emerald-50 border-emerald-300 text-emerald-700 shadow-sm'
+                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <ArrowUpRight className="w-4 h-4 text-emerald-600" />
+                <span>Receipt (Credit)</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Amount */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+              Amount ({editCurrency}) <span className="text-rose-600">*</span>
+            </label>
+            <div className="relative">
+              <span className="absolute left-3 top-2 text-xs font-bold text-slate-400 font-mono">
+                {editCurrency}
+              </span>
+              <input
+                type="number"
+                step="0.01"
+                required
+                value={editAmount}
+                onChange={e => setEditAmount(e.target.value)}
+                placeholder="0.00"
+                className="w-full bg-slate-50 border border-slate-300 rounded-lg pl-12 pr-3 py-2 text-xs font-mono font-bold text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              />
+            </div>
+          </div>
+
+          {/* Value Date */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase mb-1 flex items-center justify-between">
+              <span>Value Date <span className="text-rose-600">*</span></span>
+              {editValueDate && (
+                <span className="text-[10px] font-mono font-medium text-blue-600">
+                  {formatDisplayDate(editValueDate)}
+                </span>
+              )}
+            </label>
+            <input
+              type="date"
+              required
+              value={editValueDate}
+              onChange={e => setEditValueDate(e.target.value)}
+              className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none cursor-pointer"
+            />
+          </div>
+
+          {/* Party Name (as per Bank / Counterparty) */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase mb-1 flex items-center justify-between">
+              <span>Party Name (as per Bank / Counterparty)</span>
+              <span className="text-[10px] font-normal text-slate-400 lowercase">Logged as bank alias</span>
+            </label>
+            <input
+              type="text"
+              value={editPartyName}
+              onChange={e => setEditPartyName(e.target.value)}
+              placeholder="e.g. JS DIAMONDS LTD, Bangkok Gems & Stones Co."
+              className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-semibold text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+            />
+          </div>
+
+          {/* Printed Narration & Auto-Detect Party */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+              Printed Narration <span className="text-rose-600">*</span>
+            </label>
+            <input
+              type="text"
+              required
+              value={editNarration}
+              onChange={e => setEditNarration(e.target.value)}
+              placeholder="Exact statement line printed by the bank"
+              className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+            />
+
+            {/* Live Party Resolution Feedback in Edit */}
+            {editResolvedPartyInfo?.party ? (
+              <div className="mt-2 p-2 bg-emerald-50 border border-emerald-200 rounded-lg flex items-center space-x-2 text-xs text-emerald-800">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <div>
+                  <span className="font-bold">Auto-matched Party:</span>{' '}
+                  <span className="font-semibold">{editResolvedPartyInfo.party.system_name}</span>{' '}
+                  <span className="text-emerald-600 font-mono text-[10px]">({editResolvedPartyInfo.party.id})</span>{' '}
+                  <span className="text-[10px] text-emerald-600">
+                    via {editResolvedPartyInfo.matchedBy === 'system_name' ? 'System Name' : 'Learned Alias'}
+                  </span>
+                </div>
+              </div>
+            ) : editResolvedPartyInfo?.isUnmappedAlias ? (
+              <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded-lg flex items-center space-x-2 text-xs text-amber-800">
+                <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
+                <div className="text-[11px]">
+                  <span className="font-bold">Unmapped Bank Alias:</span> &ldquo;{editResolvedPartyInfo.matchedString}&rdquo;
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          {/* Internal Note (Description) */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+              Internal Note (Description)
+            </label>
+            <input
+              type="text"
+              value={editDescription}
+              onChange={e => setEditDescription(e.target.value)}
+              placeholder="Our internal note (typed separately)"
+              className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+            />
+          </div>
+
+          {/* Reference / UTR */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+              Reference / UTR / Cheque #
+            </label>
+            <input
+              type="text"
+              value={editReferenceNo}
+              onChange={e => setEditReferenceNo(e.target.value)}
+              placeholder="UTR or Cheque number"
+              className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+            />
+          </div>
+
+          {/* Balance After */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+              Balance After (Optional)
+            </label>
+            <input
+              type="number"
+              step="0.01"
+              value={editBalanceAfter}
+              onChange={e => setEditBalanceAfter(e.target.value)}
+              placeholder="Running balance printed on statement"
+              className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono focus:ring-2 focus:ring-blue-500 focus:outline-none"
+            />
+          </div>
+        </div>
+      </SlideOverDrawer>
     </div>
   );
 };

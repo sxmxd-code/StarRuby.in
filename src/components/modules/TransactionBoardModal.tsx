@@ -56,6 +56,8 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
     attachDocument,
     deleteDocument,
     submitApproval,
+    undoLayer2Approval,
+    deleteUserTransaction,
     updateUserTransaction,
     updateUserTransactionCell,
     recordVersions,
@@ -241,6 +243,32 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
     setTimeout(() => setApprovalFeedback(null), 4000);
   };
 
+  const handleUndoLayer2 = () => {
+    if (!window.confirm(`Undo your Layer 2 approval for transaction ${currentTxn.id}? It will return to the Layer 2 queue.`)) {
+      return;
+    }
+    const res = undoLayer2Approval(currentTxn.id);
+    setApprovalFeedback(res.message);
+    setTimeout(() => setApprovalFeedback(null), 4000);
+  };
+
+  const handleDeleteTransaction = () => {
+    if (currentRole !== 'Admin') {
+      alert('Unauthorized: Only Administrators have permission to delete transactions.');
+      return;
+    }
+    const reason = window.prompt(`Are you sure you want to permanently delete transaction ${currentTxn.id}? Please enter deletion reason:`);
+    if (reason === null) return;
+    if (!reason.trim()) {
+      alert('Deletion cancelled: A reason is required for the audit record.');
+      return;
+    }
+    const ok = deleteUserTransaction(currentTxn.id, reason.trim());
+    if (ok) {
+      onClose();
+    }
+  };
+
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-6 overflow-hidden">
       {/* Crisp Solid Scrim Backdrop (No blur, locks focus onto the modal) */}
@@ -282,9 +310,25 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
             </div>
           </div>
 
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 p-1.5 rounded-xl hover:bg-slate-100 transition cursor-pointer shrink-0">
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center space-x-1 shrink-0">
+            {currentRole === 'Admin' && (
+              <button
+                type="button"
+                onClick={handleDeleteTransaction}
+                className="text-slate-400 hover:text-rose-600 p-1.5 rounded-xl hover:bg-rose-50 transition cursor-pointer"
+                title="Delete Transaction Permanently"
+              >
+                <Trash2 className="w-5 h-5" />
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="text-slate-400 hover:text-slate-700 p-1.5 rounded-xl hover:bg-slate-100 transition cursor-pointer"
+              title="Close (Esc)"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Content Body */}
@@ -687,35 +731,67 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
                   )}
 
                   {layer2 && !layer3 && (
-                    <button
-                      onClick={() => handleApprove(3)}
-                      className="flex-1 sm:flex-none px-3.5 sm:px-4 py-2 sm:py-1.5 bg-emerald-700 text-white rounded-lg text-xs font-bold hover:bg-emerald-800 shadow-sm text-center cursor-pointer"
-                    >
-                      Layer 3 Review & Close
-                    </button>
+                    layer2.approver_id === currentUser.id ? (
+                      <button
+                        onClick={handleUndoLayer2}
+                        className="flex-1 sm:flex-none px-3.5 sm:px-4 py-2 sm:py-1.5 bg-amber-600 text-white rounded-lg text-xs font-bold hover:bg-amber-700 shadow-sm text-center flex items-center justify-center space-x-1.5 cursor-pointer"
+                        title="Undo your Layer 2 approval and return transaction to Layer 2 queue"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Undo My Layer 2 Approval</span>
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleApprove(3)}
+                        className="flex-1 sm:flex-none px-3.5 sm:px-4 py-2 sm:py-1.5 bg-emerald-700 text-white rounded-lg text-xs font-bold hover:bg-emerald-800 shadow-sm text-center cursor-pointer"
+                      >
+                        Layer 3 Review & Close
+                      </button>
+                    )
+                  )}
+
+                  {/* Move to Open & Raise Query are ONLY available if not locked by Admin Exclusivity */}
+                  {(!layer2 || layer2.approver_id !== currentUser.id || layer3) && (
+                    <>
+                      <button
+                        onClick={handleMoveToOpen}
+                        className="px-3 py-2 sm:py-1.5 bg-slate-200 text-rose-900 rounded-lg text-xs font-semibold hover:bg-rose-200 cursor-pointer"
+                      >
+                        Move to Open
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const reason = approvalComment.trim() || prompt('Enter query question or note for Admin review:');
+                          if (reason && reason.trim()) {
+                            markTransactionAsQueried(transaction.id, reason.trim());
+                            setApprovalFeedback(`Transaction status changed to QUERIED: "${reason.trim()}"`);
+                            setApprovalComment('');
+                            setTimeout(() => setApprovalFeedback(null), 4000);
+                          }
+                        }}
+                        className="px-3 py-2 sm:py-1.5 bg-purple-100 text-purple-900 border border-purple-300 rounded-lg text-xs font-semibold hover:bg-purple-200 cursor-pointer"
+                      >
+                        Raise Query (QUERY Tag)
+                      </button>
+                    </>
+                  )}
+
+                  {layer2 && !layer3 && layer2.approver_id === currentUser.id && (
+                    <span className="text-[11px] text-amber-800 bg-amber-100/80 border border-amber-200 px-2.5 py-1 rounded-md font-medium">
+                      You approved Layer 2 &bull; Awaiting other Admin for final review
+                    </span>
                   )}
 
                   <button
-                    onClick={handleMoveToOpen}
-                    className="px-3 py-2 sm:py-1.5 bg-slate-200 text-rose-900 rounded-lg text-xs font-semibold hover:bg-rose-200 cursor-pointer"
-                  >
-                    Move to Open
-                  </button>
-
-                  <button
                     type="button"
-                    onClick={() => {
-                      const reason = approvalComment.trim() || prompt('Enter query question or note for Admin review:');
-                      if (reason && reason.trim()) {
-                        markTransactionAsQueried(transaction.id, reason.trim());
-                        setApprovalFeedback(`Transaction status changed to QUERIED: "${reason.trim()}"`);
-                        setApprovalComment('');
-                        setTimeout(() => setApprovalFeedback(null), 4000);
-                      }
-                    }}
-                    className="px-3 py-2 sm:py-1.5 bg-purple-100 text-purple-900 border border-purple-300 rounded-lg text-xs font-semibold hover:bg-purple-200 cursor-pointer"
+                    onClick={handleDeleteTransaction}
+                    className="px-3 py-2 sm:py-1.5 bg-rose-100 hover:bg-rose-200 text-rose-800 border border-rose-300 rounded-lg text-xs font-bold flex items-center space-x-1 cursor-pointer"
+                    title="Delete Transaction Permanently"
                   >
-                    Raise Query (QUERY Tag)
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete</span>
                   </button>
                 </div>
               </div>
