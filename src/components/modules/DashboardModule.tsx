@@ -262,7 +262,7 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({ onNavigate }) 
               Multi-Company Banking &amp; Reconciliation Portal
             </h1>
             <p className="text-xs text-slate-600 mt-1 max-w-2xl">
-              Enterprise Multi-Entity Treasury Management &bull; Dual Co-Founder Governance (Harshil &amp; Vismay) &bull; Cloudflare R2 Document Vault
+              Enterprise Multi-Entity Treasury Management &bull; Dual Co-Founder Governance (Harshil &amp; Vismay)
             </p>
           </div>
 
