@@ -3,28 +3,39 @@ import { createPortal } from 'react-dom';
 import { useApp } from '../../context/AppContext';
 import { uploadToR2, getR2DownloadUrl } from '../../lib/storage';
 import { extractDocumentMetadataAI, ExtractedInvoiceData, isGeminiConfigured } from '../../lib/gemini';
-import { FileText, Search, Upload, Paperclip, Sparkles, ExternalLink, Trash2, Bot, Check, X, Loader2, RefreshCw } from 'lucide-react';
+import { FileText, Search, Upload, Paperclip, Sparkles, ExternalLink, Trash2, Bot, Check, X, Loader2, RefreshCw, Unlink, UploadCloud } from 'lucide-react';
 import { DocumentRecord } from '../../types/database';
 import { useBodyScrollLock } from '../../hooks/useBodyScrollLock';
 
 export const DocumentsModule: React.FC = () => {
-  const { documents, attachDocument, deleteDocument, syncWithCloudflareR2, userTransactions } = useApp();
+  const {
+    documents,
+    attachDocument,
+    deleteDocument,
+    detachDocumentFromTxn,
+    syncWithCloudflareR2,
+    scopedUserTransactions,
+  } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isDeletingId, setIsDeletingId] = useState<string | null>(null);
-  const [selectedTxnId, setSelectedTxnId] = useState(userTransactions[0]?.id || '');
-  const [docType, setDocType] = useState<'invoice' | 'receipt' | 'statement' | 'other'>('invoice');
   const [feedback, setFeedback] = useState<string | null>(null);
+
+  // Upload Modal State
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadDocType, setUploadDocType] = useState<'invoice' | 'receipt' | 'statement' | 'other'>('invoice');
+  const [uploadTxnId, setUploadTxnId] = useState<string>(''); // Default: Standalone (no transaction)
 
   // AI Analysis Modal State
   const [analyzingDoc, setAnalyzingDoc] = useState<DocumentRecord | null>(null);
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [aiResult, setAiResult] = useState<ExtractedInvoiceData | null>(null);
 
-  // Lock scrolling when AI modal is open
-  useBodyScrollLock(Boolean(analyzingDoc));
+  // Lock scrolling when AI modal or Upload modal is open
+  useBodyScrollLock(Boolean(analyzingDoc || isUploadModalOpen));
 
   const handleAnalyzeDocument = async (doc: DocumentRecord) => {
     setAnalyzingDoc(doc);
@@ -53,32 +64,39 @@ export const DocumentsModule: React.FC = () => {
     );
   }, [documents, searchQuery]);
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const handleConfirmUpload = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!uploadFile) {
+      alert('Please choose a file to upload.');
+      return;
+    }
 
     setIsUploading(true);
     try {
-      const res = await uploadToR2(file, 'documents', selectedTxnId || 'general');
+      const res = await uploadToR2(uploadFile, 'documents', uploadTxnId || 'general');
       attachDocument({
-        file_name: file.name,
+        file_name: uploadFile.name,
         r2_bucket: res.bucket,
         r2_object_key: res.objectKey,
-        content_type: file.type || 'application/pdf',
+        content_type: uploadFile.type || 'application/pdf',
         size_bytes: res.sizeBytes,
-        doc_type: docType,
-        user_txn_id: selectedTxnId || undefined,
+        doc_type: uploadDocType,
+        user_txn_id: uploadTxnId.trim() ? uploadTxnId.trim() : undefined,
         download_url: res.publicUrl,
       });
 
+      setIsUploadModalOpen(false);
+      setUploadFile(null);
+      setUploadTxnId('');
+
       if (res.isLiveCloud) {
-        setFeedback(`Success: File "${file.name}" uploaded directly to Cloudflare R2 bucket "${res.bucket}"!`);
+        setFeedback(`Success: File "${uploadFile.name}" uploaded directly to Cloudflare R2 bucket "${res.bucket}"!`);
       } else {
         setFeedback(`Notice: File saved locally. (${res.cloudError || 'Cloudflare upload pending CORS configuration in dashboard'})`);
       }
       setTimeout(() => setFeedback(null), 8000);
     } catch (err) {
-      console.error(err);
+      console.error('File upload error:', err);
       alert('Upload failed.');
     } finally {
       setIsUploading(false);
@@ -176,11 +194,19 @@ export const DocumentsModule: React.FC = () => {
           </button>
 
           {/* Upload Button */}
-          <label className="flex items-center space-x-2 px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-bold cursor-pointer shadow-sm">
+          <button
+            type="button"
+            onClick={() => {
+              setUploadFile(null);
+              setUploadDocType('invoice');
+              setUploadTxnId('');
+              setIsUploadModalOpen(true);
+            }}
+            className="flex items-center space-x-2 px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-bold cursor-pointer shadow-sm transition"
+          >
             <Upload className="w-4 h-4" />
-            <span>{isUploading ? 'Uploading to R2...' : '+ Upload Document'}</span>
-            <input type="file" onChange={handleFileUpload} className="hidden" disabled={isUploading} />
-          </label>
+            <span>+ Upload Document</span>
+          </button>
         </div>
       </div>
 
@@ -251,10 +277,35 @@ export const DocumentsModule: React.FC = () => {
                   {doc.file_name}
                 </p>
 
-                <div className="text-[11px] text-slate-500 space-y-0.5">
+                <div className="text-[11px] text-slate-500 space-y-1">
                   <p>R2 Bucket: <span className="font-mono text-slate-700 font-bold">{doc.r2_bucket}</span></p>
                   <p>Size: <span className="font-mono">{Math.round(doc.size_bytes / 1024)} KB</span></p>
-                  {doc.user_txn_id && <p>Attached to Txn: <strong className="text-rose-900">{doc.user_txn_id}</strong></p>}
+                  {doc.user_txn_id ? (
+                    <div className="flex items-center justify-between pt-0.5">
+                      <p>Attached: <strong className="text-rose-900 font-mono font-bold">{doc.user_txn_id}</strong></p>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (window.confirm(`Detach document "${doc.file_name}" from transaction ${doc.user_txn_id}? It will be kept as a standalone corporate document.`)) {
+                            await detachDocumentFromTxn(doc.id);
+                            setFeedback(`Document "${doc.file_name}" detached from transaction ${doc.user_txn_id}. Now standalone.`);
+                            setTimeout(() => setFeedback(null), 5000);
+                          }
+                        }}
+                        className="text-[10px] text-slate-500 hover:text-rose-700 font-semibold flex items-center space-x-1 px-1.5 py-0.5 rounded hover:bg-rose-50 cursor-pointer transition"
+                        title="Detach from transaction (convert to standalone corporate document)"
+                      >
+                        <Unlink className="w-3 h-3 text-rose-600" />
+                        <span>Detach</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="pt-0.5">
+                      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-600">
+                        <span>📄 Standalone Corporate Document</span>
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Gemini AI Trigger Button */}
@@ -389,6 +440,146 @@ export const DocumentsModule: React.FC = () => {
                 </div>
               </div>
             ) : null}
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Document Upload Modal */}
+      {isUploadModalOpen && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-6 overflow-hidden">
+          {/* Crisp Solid Scrim Backdrop */}
+          <div
+            className="fixed inset-0 bg-slate-950/75 transition-opacity"
+            onClick={() => !isUploading && setIsUploadModalOpen(false)}
+            aria-hidden="true"
+          />
+          <div className="relative bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-5 z-10 animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-rose-100 rounded-xl text-rose-700">
+                  <UploadCloud className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 font-serif">Upload Document to Cloudflare R2</h3>
+                  <p className="text-xs text-slate-500">Vault storage &bull; Optional transaction attachment</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => !isUploading && setIsUploadModalOpen(false)}
+                disabled={isUploading}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 cursor-pointer disabled:opacity-50"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Form */}
+            <form onSubmit={handleConfirmUpload} className="space-y-4 text-xs">
+              {/* File Drop / Selector */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  Select File <span className="text-rose-600">*</span>
+                </label>
+                <div className="p-4 border-2 border-dashed border-slate-300 rounded-xl hover:border-rose-400 transition bg-slate-50 text-center space-y-2">
+                  <input
+                    type="file"
+                    id="docUploadModalInput"
+                    onChange={e => setUploadFile(e.target.files?.[0] || null)}
+                    className="hidden"
+                    disabled={isUploading}
+                  />
+                  <label htmlFor="docUploadModalInput" className="cursor-pointer block">
+                    {uploadFile ? (
+                      <div className="flex items-center justify-center space-x-2 text-rose-800 font-semibold">
+                        <FileText className="w-5 h-5 text-rose-600 shrink-0" />
+                        <span className="truncate max-w-xs">{uploadFile.name}</span>
+                        <span className="text-[11px] text-slate-500">({Math.round(uploadFile.size / 1024)} KB)</span>
+                      </div>
+                    ) : (
+                      <div className="space-y-1">
+                        <Upload className="w-6 h-6 text-slate-400 mx-auto" />
+                        <p className="text-xs font-semibold text-slate-700">Click to browse file</p>
+                        <p className="text-[11px] text-slate-400">PDF, PNG, JPG, DOCX, XLSX, CSV up to 50MB</p>
+                      </div>
+                    )}
+                  </label>
+                </div>
+              </div>
+
+              {/* Document Classification */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  Document Classification <span className="text-rose-600">*</span>
+                </label>
+                <select
+                  value={uploadDocType}
+                  onChange={e => setUploadDocType(e.target.value as any)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-rose-600"
+                >
+                  <option value="invoice">Vendor Invoice / Bill</option>
+                  <option value="receipt">Payment Receipt / Voucher</option>
+                  <option value="statement">Bank Statement / Advice</option>
+                  <option value="other">Board Resolution / Corporate / Contract / Other</option>
+                </select>
+              </div>
+
+              {/* Attach to Transaction (Optional) */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-bold text-slate-700 uppercase">
+                    Attach to User Transaction <span className="text-[10px] text-slate-400 font-normal lowercase">(optional)</span>
+                  </label>
+                  <span className="text-[10px] text-slate-500">Leave unselected for Standalone</span>
+                </div>
+                <select
+                  value={uploadTxnId}
+                  onChange={e => setUploadTxnId(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-rose-600"
+                >
+                  <option value="">None (Standalone Corporate Document — Not Attached)</option>
+                  {scopedUserTransactions.map(t => (
+                    <option key={t.id} value={t.id}>
+                      {t.id} • {t.party_name_raw || 'Unknown Party'} • {t.currency} {t.amount.toLocaleString()} ({t.date_of_transaction})
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  General corporate files (e.g. Board Resolutions, Company Certifications) should remain standalone.
+                </p>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsUploadModalOpen(false)}
+                  disabled={isUploading}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold cursor-pointer disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!uploadFile || isUploading}
+                  className="px-5 py-2 bg-rose-700 hover:bg-rose-800 text-white font-bold rounded-lg shadow-sm flex items-center space-x-1.5 cursor-pointer disabled:opacity-50 transition"
+                >
+                  {isUploading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Uploading to R2...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="w-4 h-4" />
+                      <span>Upload Document</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>,
         document.body

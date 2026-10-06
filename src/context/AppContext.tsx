@@ -171,6 +171,7 @@ interface AppContextType {
   addComment: (userTxnId: string, message: string) => void;
   attachDocument: (doc: Omit<DocumentRecord, 'id' | 'uploaded_by' | 'created_at'>) => DocumentRecord;
   deleteDocument: (id: string) => Promise<void>;
+  detachDocumentFromTxn: (id: string) => Promise<void>;
   deleteStatementUpload: (accountId: string, month: string) => Promise<boolean>;
   syncWithCloudflareR2: () => Promise<{ verified: number; removed: number; added: number }>;
   
@@ -632,11 +633,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
               if (sb) {
                 sb.from('documents').upsert([newDoc], { onConflict: 'r2_object_key' }).then(res => {
-                  if (res.error && res.error.message?.includes('chk_belongs_to')) {
-                    const fallbackTxnId = uTxnRes?.data?.[0]?.id || bTxnRes?.data?.[0]?.id;
-                    if (fallbackTxnId) {
-                      sb.from('documents').upsert([{ ...newDoc, user_txn_id: fallbackTxnId }], { onConflict: 'r2_object_key' }).then(() => {});
-                    }
+                  if (res.error) {
+                    console.warn('Documents initial sync upsert notice:', res.error.message);
                   }
                 });
               }
@@ -3650,11 +3648,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const sb = supabase;
     if (sb) {
       sb.from('documents').insert([newDoc]).then(res => {
-        if (res.error && res.error.message?.includes('chk_belongs_to')) {
-          const fallbackTxnId = userTransactions[0]?.id || bankTransactions[0]?.id;
-          if (fallbackTxnId) {
-            sb.from('documents').insert([{ ...newDoc, user_txn_id: fallbackTxnId }]).then(() => {});
-          }
+        if (res.error) {
+          console.warn('Document insert notice:', res.error.message);
         }
       });
     }
@@ -3732,6 +3727,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         notifyRealtime('Statement file deleted from Cloudflare R2: grid cell reset to Missing (Red)');
       }
     }
+  };
+
+  const detachDocumentFromTxn = async (id: string): Promise<void> => {
+    const updated = documents.map(d => d.id === id ? { ...d, user_txn_id: undefined } : d);
+    setDocuments(updated);
+    save('documents', updated);
+    const sb = supabase;
+    if (sb) {
+      await sb.from('documents').update({ user_txn_id: null }).eq('id', id);
+    }
+    notifyRealtime('Document detached from user transaction: now standalone');
   };
 
   const deleteStatementUpload = async (accountId: string, month: string): Promise<boolean> => {
@@ -3875,11 +3881,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const sb = supabase;
         if (sb) {
           sb.from('documents').upsert([newDoc], { onConflict: 'r2_object_key' }).then(res => {
-            if (res.error && res.error.message?.includes('chk_belongs_to')) {
-              const fallbackTxnId = userTransactions[0]?.id || bankTransactions[0]?.id;
-              if (fallbackTxnId) {
-                sb.from('documents').upsert([{ ...newDoc, user_txn_id: fallbackTxnId }], { onConflict: 'r2_object_key' }).then(() => {});
-              }
+            if (res.error) {
+              console.warn('Document R2 sync upsert notice:', res.error.message);
             }
           });
         }
@@ -4260,6 +4263,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addComment,
         attachDocument,
         deleteDocument,
+        detachDocumentFromTxn,
         deleteStatementUpload,
         syncWithCloudflareR2,
         restoreCellVersion,

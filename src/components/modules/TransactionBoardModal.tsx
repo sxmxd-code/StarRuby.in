@@ -28,6 +28,7 @@ import {
   Save,
   ExternalLink,
   CheckCheck,
+  HelpCircle,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { BankTransactionBoardModal } from './BankTransactionBoardModal';
@@ -277,6 +278,15 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
     setTimeout(() => setApprovalFeedback(null), 4000);
   };
 
+  const handleClearQuery = () => {
+    const reason = approvalComment.trim() || 'Query resolved / addressed';
+    moveDiscrepancyToOpen(currentTxn.id, reason);
+    addComment(currentTxn.id, `[Query Cleared & Re-opened]: ${reason}`);
+    setApprovalFeedback('Query cleared successfully. Transaction re-opened for matching and governance.');
+    setApprovalComment('');
+    setTimeout(() => setApprovalFeedback(null), 4000);
+  };
+
   const handleUndoLayer2 = handleUndoAdminApproval;
 
   const handleDeleteTransaction = () => {
@@ -370,6 +380,34 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
               <button onClick={() => setApprovalFeedback(null)} className="underline text-[11px] ml-2">Dismiss</button>
             </div>
           ) : null}
+
+          {/* Active Query Banner */}
+          {currentTxn.status === 'queried' && (
+            <div className="p-4 rounded-xl bg-purple-50 border-2 border-purple-300 text-purple-950 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-purple-200/80 rounded-lg text-purple-800 shrink-0">
+                  <HelpCircle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-purple-900 flex items-center space-x-2">
+                    <span>Query Active on this Transaction</span>
+                    <span className="px-2 py-0.5 text-[10px] bg-purple-200 text-purple-900 rounded font-mono font-bold">QUERY</span>
+                  </h4>
+                  <p className="text-xs text-purple-800 mt-0.5">
+                    This transaction has been flagged for clarification and placed under review. Once resolved, click below to clear the query and re-open it for normal processing.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleClearQuery}
+                className="px-3.5 py-2 bg-purple-700 hover:bg-purple-800 text-white rounded-lg text-xs font-bold shadow-sm flex items-center space-x-1.5 shrink-0 cursor-pointer transition"
+              >
+                <Check className="w-4 h-4" />
+                <span>Clear Query &amp; Re-Open</span>
+              </button>
+            </div>
+          )}
 
           {/* Dual Admin Governance Stepper */}
           <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-3">
@@ -779,12 +817,24 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
                     </button>
                   )}
 
-                  <button
-                    onClick={handleMoveToOpen}
-                    className="px-3 py-2 sm:py-1.5 bg-slate-200 text-rose-900 rounded-lg text-xs font-semibold hover:bg-rose-200 cursor-pointer"
-                  >
-                    Move to Open
-                  </button>
+                  {currentTxn.status === 'queried' ? (
+                    <button
+                      type="button"
+                      onClick={handleClearQuery}
+                      className="px-3.5 py-2 sm:py-1.5 bg-purple-700 hover:bg-purple-800 text-white rounded-lg text-xs font-bold shadow-sm flex items-center space-x-1.5 cursor-pointer transition"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Clear Query &amp; Re-Open</span>
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={handleMoveToOpen}
+                        className="px-3 py-2 sm:py-1.5 bg-slate-200 text-rose-900 rounded-lg text-xs font-semibold hover:bg-rose-200 cursor-pointer"
+                      >
+                        Move to Open
+                      </button>
 
                       <button
                         type="button"
@@ -801,6 +851,8 @@ export const TransactionBoardModal: React.FC<TransactionBoardModalProps> = ({ tr
                       >
                         Raise Query (QUERY Tag)
                       </button>
+                    </>
+                  )}
 
                   <button
                     type="button"

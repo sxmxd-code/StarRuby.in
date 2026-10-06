@@ -202,6 +202,22 @@ export const UserEntryModule: React.FC = () => {
       .sort((a, b) => b.use_count - a.use_count);
   }, [selectedPartyId, partyTemplates]);
 
+  const handleSaveCurrentAsTemplate = () => {
+    if (!selectedPartyId) {
+      setFormFeedback('Please select a party first before saving a template.');
+      setTimeout(() => setFormFeedback(null), 4000);
+      return;
+    }
+    if (!description.trim()) {
+      setFormFeedback('Please type a description text to save as a template.');
+      setTimeout(() => setFormFeedback(null), 4000);
+      return;
+    }
+    addPartyTemplate(selectedPartyId, description.trim(), 'manual');
+    setFormFeedback(`Template "${description.trim()}" saved for this party!`);
+    setTimeout(() => setFormFeedback(null), 4000);
+  };
+
   // Party Auto-Suggestions (Searches system_name, party_name, CID, or raw alias)
   const partySuggestions = useMemo(() => {
     if (!partyInput.trim()) return parties.slice(0, 8);
@@ -994,53 +1010,86 @@ export const UserEntryModule: React.FC = () => {
                 <label className="text-xs font-bold text-slate-700 uppercase">
                   Description / Purpose
                 </label>
-                {availableTemplates.length > 0 && (
-                  <span className="text-[11px] text-slate-500 font-normal">
-                    {availableTemplates.length} saved templates for this party
+                {selectedPartyId && availableTemplates.length > 0 ? (
+                  <span className="text-[11px] text-rose-800 font-semibold flex items-center space-x-1">
+                    <Sparkles className="w-3 h-3 text-rose-600" />
+                    <span>{availableTemplates.length} Saved Templates</span>
                   </span>
-                )}
+                ) : null}
               </div>
 
+              {/* Quick-Pick Pills for routine templates */}
               {availableTemplates.length > 0 && (
-                <div className="mb-2">
-                  <select
-                    onChange={e => {
-                      if (e.target.value) {
-                        setDescription(e.target.value);
-                        const tpl = availableTemplates.find(t => t.template_text === e.target.value);
-                        if (tpl) incrementTemplateUsage(tpl.id);
-                      }
-                    }}
-                    className="w-full bg-rose-50/70 border border-rose-200 rounded-lg px-3 py-1.5 text-xs text-rose-900 focus:outline-none"
-                  >
-                    <option value="">-- Quick Pick Saved Template --</option>
+                <div className="space-y-1.5 mb-2.5">
+                  <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto pr-0.5">
                     {availableTemplates.map(t => (
-                      <option key={t.id} value={t.template_text}>
-                        {t.template_text} (Used {t.use_count}x)
-                      </option>
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => {
+                          setDescription(t.template_text);
+                          incrementTemplateUsage(t.id);
+                        }}
+                        className={`px-2.5 py-1 text-[11px] rounded-lg border font-medium transition cursor-pointer flex items-center space-x-1.5 ${
+                          description === t.template_text
+                            ? 'bg-rose-100 text-rose-900 border-rose-300 font-bold shadow-2xs'
+                            : 'bg-white hover:bg-rose-50 text-slate-700 hover:text-rose-900 border-slate-200 shadow-2xs'
+                        }`}
+                        title={`Click to fill description (Used ${t.use_count} times)`}
+                      >
+                        <span className="truncate max-w-[200px]">{t.template_text}</span>
+                        <span className="px-1 py-0.2 rounded text-[9px] bg-slate-100 text-slate-500 font-mono font-semibold">
+                          {t.use_count}x
+                        </span>
+                      </button>
                     ))}
-                  </select>
+                  </div>
                 </div>
               )}
 
-              <input
-                type="text"
-                value={description}
-                onChange={e => setDescription(e.target.value)}
-                placeholder="What was this transaction for? (or type fresh line)"
-                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-rose-600"
-              />
+              {/* Input with dedicated inline [+ Save as Template] button */}
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={description}
+                  onChange={e => setDescription(e.target.value)}
+                  placeholder="What was this transaction for? (or type fresh line)"
+                  className="flex-1 bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-rose-600"
+                />
+                <button
+                  type="button"
+                  onClick={handleSaveCurrentAsTemplate}
+                  disabled={!selectedPartyId || !description.trim()}
+                  className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 rounded-lg text-xs font-semibold flex items-center space-x-1 shrink-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition"
+                  title="Save this typed description as a routine template for the selected counterparty"
+                >
+                  <Plus className="w-3.5 h-3.5 text-rose-600" />
+                  <span>Save as Template</span>
+                </button>
+              </div>
 
-              {selectedPartyId && description.trim() && (
-                <label className="flex items-center space-x-2 mt-2 text-xs text-slate-600 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={saveAsTemplate}
-                    onChange={e => setSaveAsTemplate(e.target.checked)}
-                    className="rounded text-rose-600 focus:ring-rose-500"
-                  />
-                  <span>Save as reusable template for this party</span>
-                </label>
+              {/* Template Status / Helper below Input */}
+              {selectedPartyId ? (
+                <div className="flex items-center justify-between mt-2">
+                  <label className="flex items-center space-x-2 text-xs text-slate-600 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={saveAsTemplate}
+                      onChange={e => setSaveAsTemplate(e.target.checked)}
+                      className="rounded text-rose-600 focus:ring-rose-500"
+                    />
+                    <span>Save description as reusable template when submitting this form</span>
+                  </label>
+                  {description.trim() ? (
+                    <span className="text-[10px] text-slate-400">
+                      {saveAsTemplate ? 'Will save upon submit' : 'Click "Save as Template" above for instant add'}
+                    </span>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="text-[11px] text-slate-400 mt-1.5 flex items-center space-x-1">
+                  <span>💡 Tip: Select a counterparty above to load or save routine description templates for fast 1-click input.</span>
+                </p>
               )}
             </div>
 
